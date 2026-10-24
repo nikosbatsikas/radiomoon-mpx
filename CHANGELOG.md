@@ -2,6 +2,11 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.5.0
+- **RDS fix (Transmitter):** block D of every RDS group was sent with the wrong offset word (C' instead of D). FM radios could read the PI code and programme type, but not the station name (PS) or the RadioText. Both now appear on radios. (The same error was in the MPX generator of RadioMoon up to 0.5.30.)
+- **RDS display (Receiver):** a new RDS panel decodes the RDS of the received MPX, whatever the format: station name as on a radio display, RadioText, PI code, programme type (number and name), TP / TA / music, and the share of correct blocks. Works with and without the stereo pilot.
+- **Windows fit their content:** both programs make their window as high as its content (e.g. when switching tabs or when the Link and RDS panels appear), within the screen. Can be switched off: Service & tray > Window.
+
 ## 1.4.0
 - **Compact MPX** (like μMPX, for RadioMoon MPX Transmitter -> Receiver): instead of the composite waveform the transmitter sends the processed stereo audio (band-limited, pre-emphasised and limited) with the levels and the RDS data; the receiver rebuilds the composite with the same stereo matrix, 19 kHz pilot and RDS encoder. Choose it per receiver in IP outputs > Format:
   - **Compact · FLAC**: the audio lossless (16-bit, 48 kHz), about 0.95 Mbit/s.

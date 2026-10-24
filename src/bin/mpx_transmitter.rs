@@ -31,13 +31,14 @@ struct Saved {
     url: String,
     gain_db: f32,
     close_to_tray: bool,
+    fit_window: bool,
     mpx: MpxCfg,
 }
 
 impl Default for Saved {
     fn default() -> Self {
         let mpx = MpxCfg { autostart: true, card_on: true, rt_from_playlist: true, ..MpxCfg::default() };
-        Saved { kind: "stream".into(), device: String::new(), url: String::new(), gain_db: 0.0, close_to_tray: true, mpx }
+        Saved { kind: "stream".into(), device: String::new(), url: String::new(), gain_db: 0.0, close_to_tray: true, fit_window: true, mpx }
     }
 }
 
@@ -160,6 +161,7 @@ struct App {
     about: bool,
     about_tex: Option<egui::TextureHandle>,
     logo_tex: Option<egui::TextureHandle>,
+    fit_last: f32,
 }
 
 impl App {
@@ -565,9 +567,14 @@ impl eframe::App for App {
             None => "Stopped".to_string(),
         };
         self.host.frame(ctx, self.s.close_to_tray, live.is_some(), &tip);
-        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
-            self.header(ui, live.as_ref());
-        });
+        let header_h = egui::TopBottomPanel::top("header")
+            .frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0)))
+            .show(ctx, |ui| {
+                self.header(ui, live.as_ref());
+            })
+            .response
+            .rect
+            .height();
         look::about_window(
             ctx,
             &mut self.about,
@@ -586,7 +593,7 @@ impl eframe::App for App {
                 version: VERSION,
             },
         );
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
+        let content_h = egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false; // changes applied while running
                 let mut restart = false; // changes of the source or the outputs
@@ -613,9 +620,10 @@ impl eframe::App for App {
                     Tab::Signal => ch |= self.signal_card(ui),
                     Tab::Rds => ch |= self.rds_card(ui),
                     Tab::Service => {
-                        let mut c2t = self.s.close_to_tray;
-                        if self.host.settings_ui(ui, &mut c2t) {
+                        let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
+                        if self.host.settings_ui(ui, &mut c2t, &mut fit) {
                             self.s.close_to_tray = c2t;
+                            self.s.fit_window = fit;
                             ch = true;
                         }
                         card(ui, "", |ui| {
@@ -647,8 +655,13 @@ impl eframe::App for App {
                 if ch || restart {
                     self.persist(); // a running service picks up level and RDS changes from the saved file
                 }
-            });
+            })
+            .content_size
+            .y
         });
+        if self.s.fit_window {
+            look::fit_height(ctx, header_h + content_h.inner + 22.0, &mut self.fit_last);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -696,6 +709,7 @@ fn main() -> eframe::Result<()> {
                 about: false,
                 about_tex: None,
                 logo_tex: None,
+                fit_last: 0.0,
             }))
         }),
     )

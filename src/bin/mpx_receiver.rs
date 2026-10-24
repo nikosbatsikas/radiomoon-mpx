@@ -28,11 +28,12 @@ struct Saved {
     buffer_ms: u32,
     autostart: bool,
     close_to_tray: bool,
+    fit_window: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { proto: "udp".into(), port: 5004, device: String::new(), buffer_ms: 250, autostart: true, close_to_tray: true }
+        Saved { proto: "udp".into(), port: 5004, device: String::new(), buffer_ms: 250, autostart: true, close_to_tray: true, fit_window: true }
     }
 }
 
@@ -98,6 +99,7 @@ struct App {
     about: bool,
     about_tex: Option<egui::TextureHandle>,
     logo_tex: Option<egui::TextureHandle>,
+    fit_last: f32,
 }
 
 /// What the window shows: from the receiver in this program or from the service's status file.
@@ -244,6 +246,50 @@ impl App {
         });
     }
 
+    /// RDS read from the received signal: station name, RadioText, PI, programme type and flags.
+    fn rds_card(&self, ui: &mut egui::Ui, live: Option<&Live>) {
+        card(ui, "RDS", |ui| {
+            let Some(l) = live else {
+                ui.label(RichText::new("Not running.").color(look::DIM));
+                return;
+            };
+            let r = &l.v.rds;
+            if !r.synced {
+                ui.horizontal(|ui| {
+                    look::dot(ui, look::DIM);
+                    ui.label(RichText::new(if l.v.receiving { "No RDS in the signal" } else { "No signal" }).color(look::DIM));
+                });
+                return;
+            }
+            ui.horizontal(|ui| {
+                // the station name as on a radio display
+                egui::Frame::none().fill(look::INSET).rounding(5.0).stroke(egui::Stroke::new(1.0_f32, look::BORDER)).inner_margin(egui::Margin::symmetric(10.0, 4.0)).show(ui, |ui| {
+                    ui.label(RichText::new(r.ps.as_str()).monospace().size(22.0).strong().color(look::GOOD));
+                });
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("PI").small().color(look::DIM));
+                        ui.label(RichText::new(r.pi.map(|p| format!("{p:04X}")).unwrap_or_else(|| "-".into())).monospace().strong());
+                        ui.label(RichText::new("PTY").small().color(look::DIM));
+                        ui.label(r.pty.map(|p| format!("{p} {}", radiomoon_mpx::rdsdec::pty_name(p))).unwrap_or_else(|| "-".into()));
+                    });
+                    ui.horizontal(|ui| {
+                        for (on, name) in [(r.tp, "TP"), (r.ta, "TA"), (r.music, "MUSIC")] {
+                            pill(ui, name, if on { look::ACCENT } else { look::BORDER });
+                        }
+                        ui.label(RichText::new(format!("{:.0}% blocks ok", r.quality * 100.0)).small().color(if r.quality > 0.9 { look::DIM } else { look::WARN }));
+                    });
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(RichText::new("RadioText").small().color(look::DIM));
+            egui::Frame::none().fill(look::INSET).rounding(5.0).inner_margin(egui::Margin::symmetric(8.0, 4.0)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(if r.rt.is_empty() { "-" } else { r.rt.as_str() }).color(look::TEXT));
+            });
+        });
+    }
+
     fn settings_cards(&mut self, ui: &mut egui::Ui, svc_running: bool) -> bool {
         let mut ch = false;
         card(ui, "Input", |ui| {
@@ -305,9 +351,14 @@ impl eframe::App for App {
             None => "Stopped".to_string(),
         };
         self.host.frame(ctx, self.s.close_to_tray, live.as_ref().map(|l| l.v.receiving).unwrap_or(false), &tip);
-        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
-            self.header(ui, live.as_ref());
-        });
+        let header_h = egui::TopBottomPanel::top("header")
+            .frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0)))
+            .show(ctx, |ui| {
+                self.header(ui, live.as_ref());
+            })
+            .response
+            .rect
+            .height();
         look::about_window(
             ctx,
             &mut self.about,
@@ -319,14 +370,14 @@ impl eframe::App for App {
                     "UDP (RTP) or TCP, format detected automatically",
                     "L16 / L20 / L24, FLAC 16 / 20 / 24-bit and Compact MPX (FLAC / Opus)",
                     "Lost packets hidden without a pilot or RDS phase jump",
-                    "Live bandwidth, buffer and loss readouts with history",
+                    "RDS display: station name, RadioText, PI, PTY, TP / TA",
                     "Runs as a Windows / Linux service, system tray icon",
                 ],
                 png: look::RECEIVER_ICON,
                 version: VERSION,
             },
         );
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
+        let content_h = egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false;
                 // settings 1/3, link 2/3 of the width (one column on narrow windows)
@@ -343,19 +394,22 @@ impl eframe::App for App {
                         ui.vertical(|ui| {
                             ui.set_width(total - gap - left);
                             self.link_card(ui, live.as_ref());
+                            self.rds_card(ui, live.as_ref());
                         });
                     });
                 } else {
                     self.link_card(ui, live.as_ref());
+                    self.rds_card(ui, live.as_ref());
                     ch |= self.settings_cards(ui, svc.running);
                 }
-                let mut c2t = self.s.close_to_tray;
-                egui::CollapsingHeader::new(RichText::new("Service & tray").strong().color(look::ACCENT)).default_open(svc.installed).show(ui, |ui| {
-                    if self.host.settings_ui(ui, &mut c2t) {
+                let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
+                egui::CollapsingHeader::new(RichText::new("Service, tray & window").strong().color(look::ACCENT)).default_open(svc.installed).show(ui, |ui| {
+                    if self.host.settings_ui(ui, &mut c2t, &mut fit) {
                         ch = true;
                     }
                 });
                 self.s.close_to_tray = c2t;
+                self.s.fit_window = fit;
                 if let Some(l) = &live {
                     card(ui, "Signal analysis", |ui| {
                         look::deviation_bar(ui, l.peak);
@@ -369,8 +423,13 @@ impl eframe::App for App {
                 if ch {
                     self.persist();
                 }
-            });
+            })
+            .content_size
+            .y
         });
+        if self.s.fit_window {
+            look::fit_height(ctx, header_h + content_h.inner + 22.0, &mut self.fit_last);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -411,6 +470,7 @@ fn main() -> eframe::Result<()> {
                 about: false,
                 about_tex: None,
                 logo_tex: None,
+                fit_last: 0.0,
             }))
         }),
     )

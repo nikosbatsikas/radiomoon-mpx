@@ -322,3 +322,20 @@ pub fn about_window(ctx: &egui::Context, open: &mut bool, tex: &mut Option<egui:
         *open = false;
     }
 }
+
+// ---------------------------------------------------------------- window that fits its content
+
+/// Makes the window as high as its content (`want`, in points), within the screen. Call once per frame after the
+/// layout; `last` remembers the last request so the size is only sent when it changes. Not while maximised.
+pub fn fit_height(ctx: &egui::Context, want: f32, last: &mut f32) {
+    let (cur, monitor, maximized, fullscreen) = ctx.input(|i| (i.screen_rect().size(), i.viewport().monitor_size, i.viewport().maximized, i.viewport().fullscreen));
+    if maximized == Some(true) || fullscreen == Some(true) {
+        return;
+    }
+    let max_h = monitor.map(|m| m.y * 0.9).unwrap_or(1200.0).max(320.0);
+    let target = want.clamp(320.0, max_h).round();
+    if (target - cur.y).abs() > 4.0 && (target - *last).abs() > 0.5 {
+        *last = target;
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(cur.x, target)));
+    }
+}
