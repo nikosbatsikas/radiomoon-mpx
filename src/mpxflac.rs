@@ -978,6 +978,8 @@ pub struct Depacketizer {
     ssrc: Option<u32>,
     hist: History,
     pub stats: RxStats,
+    /// SFN time stamp of the last packet: (position of its first sample in the output of that call, UTC ns).
+    pub stamp: Option<(usize, i64)>,
 }
 
 impl Default for Depacketizer {
@@ -988,11 +990,12 @@ impl Default for Depacketizer {
 
 impl Depacketizer {
     pub fn new() -> Self {
-        Depacketizer { expected: None, ssrc: None, hist: History::new(), stats: RxStats::default() }
+        Depacketizer { expected: None, ssrc: None, hist: History::new(), stats: RxStats::default(), stamp: None }
     }
 
     /// Handles one UDP datagram; appends the samples to play to `out`. Returns false for a packet that is not RTP.
     pub fn packet(&mut self, pkt: &[u8], out: &mut Vec<f32>) -> bool {
+        self.stamp = None;
         if pkt.len() < 12 || pkt[0] >> 6 != 2 {
             return false;
         }
@@ -1091,10 +1094,23 @@ impl Depacketizer {
             }
             // a jump of more than 200 ms (or back in time): continue from here without filling
         }
+        if let Some(st) = sfn_stamp(pkt) {
+            self.stamp = Some((out.len(), st));
+        }
         self.hist.push(&cur, out);
         self.expected = Some(ts.wrapping_add(n as u32));
         true
     }
+}
+
+/// SFN time stamp of an RTP packet (RTP header extension, profile 0x524D "RM"; see sfn.rs).
+pub fn sfn_stamp(pkt: &[u8]) -> Option<i64> {
+    if pkt.len() < 12 || pkt[0] >> 6 != 2 || pkt[0] & 0x10 == 0 {
+        return None;
+    }
+    let off = 12 + 4 * (pkt[0] & 0x0F) as usize;
+    let e = pkt.get(off..off + 12)?;
+    (u16::from_be_bytes([e[0], e[1]]) == 0x524D && u16::from_be_bytes([e[2], e[3]]) >= 2).then(|| i64::from_be_bytes([e[4], e[5], e[6], e[7], e[8], e[9], e[10], e[11]]))
 }
 
 /// Reads a TCP stream: FLAC when it starts with TCP_FLAC_MAGIC, otherwise raw L24.

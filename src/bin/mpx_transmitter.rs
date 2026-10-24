@@ -124,6 +124,7 @@ fn service_work(stop: Arc<AtomicBool>) {
             card: m.card_status(),
             links: m.links(),
             scope: m.scope.lock().map(|g| g.clone()).unwrap_or_default(),
+            clock: m.clock_state(),
         };
         status::write(&st_path, &snap);
         std::thread::sleep(Duration::from_millis(250));
@@ -142,6 +143,7 @@ enum Tab {
     Card,
     Signal,
     Rds,
+    Sfn,
     Service,
 }
 
@@ -175,6 +177,7 @@ struct App {
     about_tex: Option<egui::TextureHandle>,
     logo_tex: Option<egui::TextureHandle>,
     fit_last: f32,
+    ports: Vec<String>,
 }
 
 impl App {
@@ -436,6 +439,27 @@ impl App {
         ch
     }
 
+    /// SFN: time stamps from a reference clock in every UDP packet.
+    fn sfn_card(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut restart = false;
+        let clock = self.mpx.as_ref().and_then(|m| m.clock_state()).or_else(|| self.svc.as_ref().and_then(|s| s.clock.clone()));
+        card(ui, "SFN (single frequency network)", |ui| {
+            restart |= ui.checkbox(&mut self.s.mpx.sfn_on, "Send SFN time stamps in every UDP packet").changed();
+            ui.label(
+                RichText::new("Each packet carries the UTC time of its first sample from the reference clock. The MPX Receivers with SFN on play every sample at this time + their delay (the same delay at all sites), so all transmitters of the network are on air in step. Only UDP (RTP) outputs carry the time stamps; receivers without SFN simply ignore them.")
+                    .small()
+                    .color(look::DIM),
+            );
+        });
+        if self.s.mpx.sfn_on {
+            restart |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.mpx.clock, clock.as_ref(), &self.ports);
+            if ui.small_button("Refresh the list of serial ports").clicked() {
+                self.ports = radiomoon_mpx::clock::serial_ports();
+            }
+        }
+        restart
+    }
+
     fn card_output(&mut self, ui: &mut egui::Ui) -> bool {
         let mut restart = false;
         card(ui, "Sound card output", |ui| {
@@ -620,7 +644,7 @@ impl eframe::App for App {
                     "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
                     "Internet stream, sound input or a ready MPX input (192 kHz) as the source",
                     "Any number of IP receivers: UDP or TCP, L16/L20/L24, FLAC lossless or Compact MPX (FLAC / Opus)",
-                    "QoS (DSCP) marking, live bandwidth per receiver",
+                    "QoS (DSCP), live bandwidth, SFN time stamps from GPS or PTP (IEEE 1588v2)",
                     "Runs as a Windows / Linux service, system tray icon",
                 ],
                 png: look::TRANSMITTER_ICON,
@@ -636,7 +660,7 @@ impl eframe::App for App {
                 }
                 // ---- tabs
                 ui.horizontal_wrapped(|ui| {
-                    for (t, name) in [(Tab::Source, "Audio source"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Service, "Service & tray")] {
+                    for (t, name) in [(Tab::Source, "Audio source"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Sfn, "SFN"), (Tab::Service, "Service & tray")] {
                         let on = self.tab == t;
                         let txt = RichText::new(name).strong().color(if on { look::ACCENT } else { look::TEXT });
                         if ui.add(egui::Button::new(txt).fill(if on { look::CARD } else { look::PANEL }).stroke(egui::Stroke::new(1.0_f32, if on { look::ACCENT } else { look::BORDER }))).clicked() {
@@ -658,6 +682,7 @@ impl eframe::App for App {
                     }
                     Tab::Signal => ch |= self.signal_card(ui),
                     Tab::Rds => ch |= self.rds_card(ui),
+                    Tab::Sfn => restart |= self.sfn_card(ui),
                     Tab::Service => {
                         let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
                         if self.host.settings_ui(ui, &mut c2t, &mut fit) {
@@ -749,6 +774,7 @@ fn main() -> eframe::Result<()> {
                 about_tex: None,
                 logo_tex: None,
                 fit_last: 0.0,
+                ports: radiomoon_mpx::clock::serial_ports(),
             }))
         }),
     )

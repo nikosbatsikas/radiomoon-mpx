@@ -29,6 +29,9 @@ pub struct MpxCfg {
     #[serde(skip_serializing)]
     pub ip_port: u16,
     pub targets_ready: bool,
+    /// SFN: stamp every UDP packet with the UTC time of its first sample from the reference clock.
+    pub sfn_on: bool,
+    pub clock: crate::clock::ClockCfg,
     pub rds_on: bool,
     pub pi: String,
     pub ps: String,
@@ -59,6 +62,8 @@ impl Default for MpxCfg {
             ip_host: String::new(),
             ip_port: 5004,
             targets_ready: false,
+            sfn_on: false,
+            clock: crate::clock::ClockCfg::default(),
             rds_on: true,
             pi: "1234".into(),
             ps: "RADIOMON".into(),

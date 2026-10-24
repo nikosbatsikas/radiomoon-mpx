@@ -44,6 +44,14 @@ impl Codec {
     pub fn frame_192(self) -> usize {
         self.frame() * FACTOR
     }
+    /// Delay from the transmitter's composite to the receiver's rebuilt composite, 192 kHz samples: the receiver's
+    /// interpolator (128) and, for Opus, the codec's own delay (312 samples at 48 kHz). Measured; used for SFN.
+    pub fn latency_192(self) -> usize {
+        match self {
+            Codec::Flac => 128,
+            Codec::Opus => 128 + 312 * FACTOR,
+        }
+    }
 }
 
 fn level(v: f32) -> [u8; 2] {
@@ -337,6 +345,8 @@ pub struct CompactRx {
     expected: Option<u32>,
     ssrc: Option<u32>,
     pub stats: RxStats,
+    /// SFN time stamp of the last packet: (position of its first sample in the output of that call, UTC ns).
+    pub stamp: Option<(usize, i64)>,
 }
 
 impl Default for CompactRx {
@@ -347,7 +357,7 @@ impl Default for CompactRx {
 
 impl CompactRx {
     pub fn new() -> CompactRx {
-        CompactRx { dec: Decoder::new(), expected: None, ssrc: None, stats: RxStats::default() }
+        CompactRx { dec: Decoder::new(), expected: None, ssrc: None, stats: RxStats::default(), stamp: None }
     }
 
     /// True for an RTP packet of Compact MPX.
@@ -365,6 +375,7 @@ impl CompactRx {
     }
 
     pub fn packet(&mut self, pkt: &[u8], out: &mut Vec<f32>) -> bool {
+        self.stamp = None;
         if !Self::is_compact(pkt) {
             return false;
         }
@@ -406,6 +417,10 @@ impl CompactRx {
         let before = out.len();
         match self.dec.payload(&pkt[off..end], out) {
             Some(c) => {
+                if let Some(st) = crate::mpxflac::sfn_stamp(pkt) {
+                    // the rebuilt samples are late by the codec path: the sample at `before` belongs to an earlier time
+                    self.stamp = Some((before, st - (c.latency_192() as f64 * 1e9 / 192_000.0) as i64));
+                }
                 self.note(c);
                 self.stats.packets += 1;
                 self.expected = Some(ts.wrapping_add((out.len() - before) as u32));

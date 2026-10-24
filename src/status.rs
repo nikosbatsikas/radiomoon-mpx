@@ -26,6 +26,8 @@ pub struct TxStatus {
     pub card: String,
     pub links: Vec<(IpTarget, LinkStat)>,
     pub scope: ScopeData,
+    /// SFN reference clock (when SFN is on).
+    pub clock: Option<crate::clock::ClockState>,
 }
 
 /// Status of the MPX Receiver running as a service.

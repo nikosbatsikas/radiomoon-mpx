@@ -58,6 +58,9 @@ pub struct StereoDecoder {
 }
 
 impl StereoDecoder {
+    /// Delay of the decoder's filters, samples (255-tap FIR).
+    pub const DELAY: usize = 127;
+
     pub fn new(fs: u32) -> StereoDecoder {
         let fs = fs as f64;
         StereoDecoder {

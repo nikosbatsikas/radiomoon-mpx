@@ -2,6 +2,14 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.8.0
+- **SFN (single frequency network)** with GPS or PTP (IEEE 1588v2) time, in a new SFN tab of both programs:
+  - **Transmitter:** "Send SFN time stamps": every UDP packet carries the UTC time of its first sample (RTP header extension; receivers without SFN ignore it). Works with every source, also the MPX input from a sound card (the input card's own clock is followed), and with every format (PCM, FLAC, Compact MPX; the codec delays of Compact MPX are compensated).
+  - **Receiver:** "Play every sample at its time stamp + delay": the same delay at all sites puts all transmitters on air in step. A fine resampler (32-tap windowed sinc, flat to 60 kHz) follows the reference clock, so the sound card's own clock does not drift away. Shown live: state, timing error (µs), rate trim (ppm), arrival margin, stamp jitter, restarts; an "SFN LOCKED" light in the header. Per-site output correction (µs) for the delay of sound card, exciter and cables.
+  - **Reference clock:** system clock (most precise when the computer is synchronised by PTP, e.g. ptp4l + phc2sys or the Windows PTP client, or by GPS PPS with gpsd + chrony), the built-in PTP client (IEEE 1588v2 default profile, multicast, end-to-end delay; about ±10-100 µs with software time stamps), or a GPS receiver on a serial port (NMEA; with PPS on the DCD line about ±0.1-1 ms).
+  - Tested: two simulated sites with sound cards 40 ppm fast and 25 ppm slow and different network delays lock to about 1 µs; live, FLAC, L16 and Compact Opus sites (and an MPX input with a 30 ppm fast card) lock within some tens of µs on a busy test computer.
+- **Receiver window:** the Link panel is at the top; below it the tabs RDS, Input, Output, SFN and Service, tray & window.
+
 ## 1.7.0
 - **MPX input to Compact MPX:** with an MPX input as the source, Compact MPX outputs now work too. The Transmitter decodes the composite (stereo audio with a pilot PLL and the 38 kHz demodulator, the measured pilot and RDS levels, and the RDS station name, RadioText, PI, PTY and flags) and sends that as Compact MPX; the receiver rebuilds the composite with the same levels and RDS. Tested: audio, pilot and stereo levels match the input within 0.1 dB, RDS level measured exactly (2 / 4 / 6 %), more than 30 dB stereo separation. Other RDS services of the input (clock, AF lists ...) are not carried; use PCM or FLAC for an exact copy of the input.
 
