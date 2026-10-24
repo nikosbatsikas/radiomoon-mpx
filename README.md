@@ -27,12 +27,22 @@ Enable RadioMoon's internet broadcast (Icecast or Shoutcast) and set the MPX Tra
 
 ## Transport over IP
 
-| Format | Bitrate | Quality |
-|---|---|---|
-| L24 uncompressed | 4.6 Mbit/s | 24-bit, 192 kHz |
-| FLAC lossless | about 3–4 Mbit/s (depends on the audio) | bit-exact, identical to L24 |
+The Transmitter sends to any number of receivers (**Add receiver**); each output has its own address, port, protocol, format, bit depth and QoS, and shows its live bandwidth.
 
-Protocols: UDP (RTP; L24 = payload type 97, FLAC = 98) or TCP. With FLAC every 2 ms packet (384 samples) is one complete, standard FLAC frame (24-bit, mono, 192 kHz); over TCP the stream starts with `RMF1` and every frame follows as a 16-bit length (big endian) and the frame. The receiver detects the format by itself.
+| Format | Bandwidth on the network* | Quality |
+|---|---|---|
+| L24 uncompressed | 4.9 Mbit/s | 24-bit, 192 kHz |
+| L20 uncompressed | 4.0 Mbit/s | 20-bit (about 120 dB dynamic range) |
+| L16 uncompressed | 3.3 Mbit/s | 16-bit (about 96 dB) |
+| FLAC 24-bit | about 3.7 Mbit/s | bit-exact, identical to L24 |
+| FLAC 20-bit | about 3.0 Mbit/s | identical to L20 |
+| FLAC 16-bit | about 2.2 Mbit/s | identical to L16 |
+
+\* including IP/UDP headers; FLAC depends on the audio. The sample rate is always 192 kHz: the MPX reaches 60 kHz (pilot 19, stereo 38, RDS 57 kHz). FM itself has about 70 dB signal-to-noise, so 16-bit is usually enough; 16 and 20 bits use TPDF dither.
+
+Protocols: UDP (RTP payload types: L24 = 97, FLAC = 98, L16 = 99, L20 = 100) or TCP (FLAC streams start with `RMF1`, 16/20-bit PCM with `RMP1` + one byte with the bits, 24-bit PCM is raw). With FLAC every 2 ms packet (384 samples) is one complete, standard FLAC frame (24-bit, mono, 192 kHz); over TCP the stream starts with `RMF1` and every frame follows as a 16-bit length (big endian) and the frame. The receiver detects the format by itself.
+
+**QoS:** every output marks its packets with a DSCP class: EF (46, default) for real-time audio, AF41 (34) on AES67 networks, CS5, CS6, off, or any value 0-63. Linux and macOS set it directly. Windows ignores the marking of programs unless a QoS policy allows it: Group Policy > Computer Configuration > Windows Settings > Policy-based QoS > new policy for `RadioMoon-MPX-Transmitter.exe` with the DSCP value.
 
 A lost UDP packet is concealed by repeating the last 2 ms. That is a whole number of cycles of 19, 38 and 57 kHz, so pilot, stereo and RDS stay in phase (radios do not drop to mono or lose RDS) and the timing stays exact. The receiver status shows the format, the bitrate and the lost / concealed packets.
 

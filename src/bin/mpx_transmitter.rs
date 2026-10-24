@@ -1,17 +1,20 @@
 //! RadioMoon MPX Transmitter - a small stand-alone program: it takes audio from a sound card input, an internet radio
 //! stream or a folder of audio files (random order), builds the FM multiplex (stereo, pilot, RDS) and sends it to a
-//! 192 kHz sound card and/or over IP (to the RadioMoon MPX Receiver). It runs by itself, no RadioMoon needed.
+//! 192 kHz sound card and/or over IP to any number of RadioMoon MPX Receivers. It runs by itself, no RadioMoon needed.
 //! To put RadioMoon on air, use its internet broadcast as the stream source: the song titles become the RadioText.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use radiomoon_mpx::{model, mpx, mpxscope, srcin};
-use eframe::egui::{self, Color32, RichText};
-use model::MpxCfg;
-use mpx::MpxHandle;
+use eframe::egui::{self, RichText};
+use radiomoon_mpx::look::{self, card, inset, pill, tile};
+use radiomoon_mpx::model::{IpTarget, MpxCfg};
+use radiomoon_mpx::mpx::{LinkStat, MpxHandle};
+use radiomoon_mpx::mpxscope;
+use radiomoon_mpx::srcin::{self, SrcCfg, SrcHandle};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
-use srcin::{SrcCfg, SrcHandle};
 use std::path::PathBuf;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -56,6 +59,8 @@ struct App {
     ins: Vec<String>,
     last_now: String,
     first: bool,
+    /// Settings that only apply after Stop / Start were changed while running.
+    pending: bool,
 }
 
 impl App {
@@ -66,6 +71,7 @@ impl App {
         self.mpx = Some(MpxHandle::start(&self.s.mpx, rx));
         self.src = Some(h);
         self.last_now.clear();
+        self.pending = false;
     }
 
     fn stop(&mut self) {
@@ -75,6 +81,7 @@ impl App {
         if let Some(s) = self.src.take() {
             s.stop();
         }
+        self.pending = false;
     }
 
     fn persist(&self) {
@@ -84,10 +91,10 @@ impl App {
     }
 }
 
-fn combo(ui: &mut egui::Ui, id: &str, cur: &mut String, items: &[String]) -> bool {
+fn combo(ui: &mut egui::Ui, id: &str, cur: &mut String, items: &[String], width: f32) -> bool {
     let mut ch = false;
     let shown = if cur.is_empty() { "Default".to_string() } else { cur.clone() };
-    egui::ComboBox::from_id_salt(id).width(340.0).selected_text(shown).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).width(width).selected_text(shown).show_ui(ui, |ui| {
         ch |= ui.selectable_value(cur, String::new(), "Default").changed();
         for d in items {
             ch |= ui.selectable_value(cur, d.clone(), d).changed();
@@ -96,16 +103,297 @@ fn combo(ui: &mut egui::Ui, id: &str, cur: &mut String, items: &[String]) -> boo
     ch
 }
 
+/// Label column of the settings grids.
+fn cap(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).color(look::DIM));
+}
+
+impl App {
+    // ------------------------------------------------------------ header
+    fn header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("RadioMoon MPX Transmitter").size(19.0).strong());
+            ui.label(RichText::new(format!("v{VERSION}")).small().color(look::DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.mpx.is_none() {
+                    if look::primary_button(ui, "▶  Start").clicked() {
+                        self.start();
+                    }
+                    pill(ui, "STOPPED", look::DIM);
+                } else {
+                    if look::danger_button(ui, "■  Stop").clicked() {
+                        self.stop();
+                    }
+                    let waiting = self.mpx.as_ref().map(|m| m.status().starts_with("Waiting")).unwrap_or(false);
+                    if waiting {
+                        pill(ui, "NO AUDIO", look::WARN);
+                    } else {
+                        pill(ui, "ON AIR", look::GOOD);
+                    }
+                }
+            });
+        });
+    }
+
+    // ------------------------------------------------------------ live overview
+    fn overview(&mut self, ui: &mut egui::Ui, links: &[(IpTarget, LinkStat)]) {
+        let (Some(src), Some(m)) = (&self.src, &self.mpx) else { return };
+        card(ui, "On air", |ui| {
+            look::deviation_bar(ui, m.peak());
+            ui.add_space(6.0);
+            let total: f32 = links.iter().map(|(_, l)| l.mbps).sum();
+            let up = links.iter().filter(|(_, l)| l.ok).count();
+            ui.horizontal_wrapped(|ui| {
+                tile(ui, "Deviation peak", &format!("{:.1}", m.peak() * 75.0), "kHz", if m.peak() > 1.0 { look::BAD } else { look::TEXT }, 120.0);
+                tile(ui, "IP bandwidth (total)", &look::mbps(total), "Mbit/s", look::ACCENT, 150.0);
+                tile(ui, "IP outputs", &format!("{up} / {}", links.len()), "working", if up == links.len() { look::GOOD } else { look::WARN }, 120.0);
+                let card_on = !m.card_status().is_empty();
+                tile(ui, "Sound card", if card_on { "On" } else { "Off" }, "192 kHz", if card_on { look::GOOD } else { look::DIM }, 100.0);
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                look::dot(ui, look::GOOD);
+                ui.label(src.status());
+            });
+            let now = src.now();
+            if !now.is_empty() {
+                ui.label(RichText::new(format!("RadioText: {now}")).color(look::DIM));
+            }
+            let cs = m.card_status();
+            if !cs.is_empty() {
+                ui.label(RichText::new(cs).small().color(look::DIM));
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ settings cards
+    fn source_card(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut restart = false;
+        card(ui, "Audio source", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                restart |= ui.selectable_value(&mut self.s.kind, "folder".to_string(), "Folder").changed();
+                restart |= ui.selectable_value(&mut self.s.kind, "stream".to_string(), "Internet stream").changed();
+                restart |= ui.selectable_value(&mut self.s.kind, "input".to_string(), "Sound input").changed();
+            });
+            ui.add_space(4.0);
+            match self.s.kind.as_str() {
+                "folder" => {
+                    ui.horizontal(|ui| {
+                        restart |= ui.add(egui::TextEdit::singleline(&mut self.s.folder).hint_text("Folder of audio files").desired_width((ui.available_width() - 90.0).max(100.0))).changed();
+                        if ui.button("Browse...").clicked() {
+                            if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                                self.s.folder = p.to_string_lossy().to_string();
+                                restart = true;
+                            }
+                        }
+                    });
+                    restart |= ui.checkbox(&mut self.s.shuffle, "Random order (a different order at every start)").changed();
+                }
+                "stream" => {
+                    restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
+                    ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
+                }
+                _ => {
+                    let w = (ui.available_width() - 10.0).max(150.0);
+                    restart |= combo(ui, "in", &mut self.s.device, &self.ins, w);
+                }
+            }
+            ui.horizontal(|ui| {
+                cap(ui, "Level");
+                restart |= ui.add(egui::Slider::new(&mut self.s.gain_db, -24.0..=12.0).suffix(" dB")).changed();
+            });
+        });
+        restart
+    }
+
+    fn signal_card(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut ch = false;
+        card(ui, "Signal", |ui| {
+            let c = &mut self.s.mpx;
+            let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
+            ch |= ui.checkbox(&mut c.stereo, "Stereo (19 kHz pilot and 38 kHz subcarrier)").changed();
+            egui::Grid::new("sig").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                cap(ui, "Audio level");
+                ch |= ui.add(egui::Slider::new(&mut c.audio_level, 0.3..=1.0).custom_formatter(pct)).changed();
+                ui.end_row();
+                cap(ui, "Pilot level");
+                ch |= ui.add(egui::Slider::new(&mut c.pilot_level, 0.0..=0.12).custom_formatter(pct)).changed();
+                ui.end_row();
+                cap(ui, "RDS level");
+                ch |= ui.add(egui::Slider::new(&mut c.rds_level, 0.0..=0.08).custom_formatter(pct)).changed();
+                ui.end_row();
+                cap(ui, "Output level");
+                ch |= ui.add(egui::Slider::new(&mut c.output, 0.1..=1.0).custom_formatter(pct)).changed();
+                ui.end_row();
+                cap(ui, "Pre-emphasis");
+                ui.horizontal(|ui| {
+                    ch |= ui.selectable_value(&mut c.preemph_us, 50.0, "50 µs").changed();
+                    ch |= ui.selectable_value(&mut c.preemph_us, 75.0, "75 µs").changed();
+                    ch |= ui.selectable_value(&mut c.preemph_us, 0.0, "Off").changed();
+                });
+                ui.end_row();
+            });
+            ch |= ui.checkbox(&mut c.limiter, "Peak limiter").changed();
+        });
+        ch
+    }
+
+    fn rds_card(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut ch = false;
+        card(ui, "RDS", |ui| {
+            let c = &mut self.s.mpx;
+            ch |= ui.checkbox(&mut c.rds_on, "Send RDS").changed();
+            egui::Grid::new("rds").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                cap(ui, "Station name (PS)");
+                ch |= ui.add(egui::TextEdit::singleline(&mut c.ps).desired_width(110.0).char_limit(8)).changed();
+                ui.end_row();
+                cap(ui, "PI code (hex)");
+                ui.horizontal(|ui| {
+                    ch |= ui.add(egui::TextEdit::singleline(&mut c.pi).desired_width(60.0).char_limit(4)).changed();
+                    cap(ui, "PTY");
+                    ch |= ui.add(egui::DragValue::new(&mut c.pty).range(0..=31)).changed();
+                });
+                ui.end_row();
+                cap(ui, "RadioText");
+                ch |= ui.add(egui::TextEdit::singleline(&mut c.rt).desired_width(ui.available_width().max(160.0)).char_limit(64)).changed();
+                ui.end_row();
+            });
+            ch |= ui.checkbox(&mut c.rt_from_playlist, "RadioText from the song: file name (folder) or song title sent by the stream server").changed();
+            ui.horizontal(|ui| {
+                ch |= ui.checkbox(&mut c.tp, "TP").changed();
+                ch |= ui.checkbox(&mut c.ta, "TA").changed();
+                ch |= ui.checkbox(&mut c.music, "Music").changed();
+            });
+        });
+        ch
+    }
+
+    fn card_output(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut restart = false;
+        card(ui, "Sound card output", |ui| {
+            let c = &mut self.s.mpx;
+            restart |= ui.checkbox(&mut c.card_on, "192 kHz sound card (MPX input of the exciter)").changed();
+            let on = c.card_on;
+            let outs = &self.outs;
+            ui.add_enabled_ui(on, |ui| {
+                let w = (ui.available_width() - 10.0).max(150.0);
+                restart |= combo(ui, "out", &mut c.card_device, outs, w);
+            });
+        });
+        restart
+    }
+
+    /// The list of receivers, each with its settings and, while running, its live bandwidth.
+    fn ip_card(&mut self, ui: &mut egui::Ui, links: &[(IpTarget, LinkStat)]) -> bool {
+        let mut restart = false;
+        let running = self.mpx.is_some();
+        card(ui, "IP outputs", |ui| {
+            let c = &mut self.s.mpx;
+            restart |= ui.checkbox(&mut c.ip_on, "Send over IP (24-bit, 192 kHz) to these receivers").changed();
+            ui.add_space(4.0);
+            let mut remove: Option<usize> = None;
+            let n = c.targets.len();
+            let ip_on = c.ip_on;
+            for (i, t) in c.targets.iter_mut().enumerate() {
+                let live = links.iter().find(|(lt, _)| *lt == *t).map(|(_, l)| l);
+                inset(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let color = match live {
+                            Some(l) if l.ok => look::GOOD,
+                            Some(_) => look::BAD,
+                            None => look::DIM,
+                        };
+                        look::dot(ui, color);
+                        restart |= ui.checkbox(&mut t.enabled, "").on_hover_text("Send to this receiver").changed();
+                        restart |= ui.add(egui::TextEdit::singleline(&mut t.name).hint_text("Name (site)").desired_width(150.0)).changed();
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if n > 1 && ui.small_button("✖").on_hover_text("Remove this receiver").clicked() {
+                                remove = Some(i);
+                            }
+                            if let Some(l) = live {
+                                ui.label(RichText::new(format!("{} Mbit/s", look::mbps(l.mbps))).strong().size(15.0).color(look::ACCENT));
+                            }
+                        });
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        cap(ui, "Address");
+                        restart |= ui.add(egui::TextEdit::singleline(&mut t.host).hint_text("IP or host name").desired_width(140.0)).changed();
+                        cap(ui, "Port");
+                        restart |= ui.add(egui::DragValue::new(&mut t.port).range(1..=65535)).changed();
+                        egui::ComboBox::from_id_salt(("proto", i)).width(100.0).selected_text(if t.proto == "tcp" { "TCP" } else { "UDP (RTP)" }).show_ui(ui, |ui| {
+                            restart |= ui.selectable_value(&mut t.proto, "udp".to_string(), "UDP (RTP)").changed();
+                            restart |= ui.selectable_value(&mut t.proto, "tcp".to_string(), "TCP").changed();
+                        });
+                        egui::ComboBox::from_id_salt(("codec", i)).width(130.0).selected_text(if t.codec == "flac" { "FLAC lossless" } else { "PCM uncompressed" }).show_ui(ui, |ui| {
+                            restart |= ui.selectable_value(&mut t.codec, "flac".to_string(), "FLAC lossless").changed();
+                            restart |= ui.selectable_value(&mut t.codec, "l24".to_string(), "PCM uncompressed").changed();
+                        });
+                        let est = |codec: &str, bits: u32| -> f32 {
+                            // typical bandwidth incl. headers; FLAC depends on the audio
+                            let pcm = 192_000.0 * bits as f32 / 1e6 + 0.32;
+                            if codec == "flac" { pcm * 0.8 } else { pcm }
+                        };
+                        let shown_bits = t.bits();
+                        egui::ComboBox::from_id_salt(("bits", i)).width(170.0).selected_text(format!("{shown_bits}-bit, 192 kHz")).show_ui(ui, |ui| {
+                            for b in [24u32, 20, 16] {
+                                let txt = format!("{b}-bit (about {:.1} Mbit/s)", est(&t.codec, b));
+                                restart |= ui.selectable_value(&mut t.bits, b, txt).changed();
+                            }
+                        });
+                        egui::ComboBox::from_id_salt(("dscp", i)).width(110.0).selected_text(format!("QoS {}", t.dscp_name())).show_ui(ui, |ui| {
+                            for (v, name) in [(46u8, "EF (46): real-time audio, recommended"), (34, "AF41 (34): AES67 audio"), (40, "CS5 (40)"), (48, "CS6 (48)"), (0, "Off: no marking")] {
+                                restart |= ui.selectable_value(&mut t.dscp, v, name).changed();
+                            }
+                        })
+                        .response
+                        .on_hover_text("DSCP class written into every packet, so routers and switches with QoS give the MPX priority");
+                        restart |= ui.add(egui::DragValue::new(&mut t.dscp).range(0..=63).prefix("DSCP ")).changed();
+                    });
+                    if let Some(l) = live {
+                        let saving = if t.codec == "flac" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
+                        ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
+                        look::sparkline(ui, &l.hist, 46.0, look::ACCENT);
+                    } else if running && t.enabled && ip_on {
+                        ui.label(RichText::new("Changed: applied when you press Stop and Start").small().color(look::WARN));
+                    }
+                });
+                ui.add_space(6.0);
+            }
+            if let Some(i) = remove {
+                c.targets.remove(i);
+                restart = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.button("+  Add receiver").clicked() {
+                    let mut t = IpTarget::default();
+                    if let Some(last) = c.targets.last() {
+                        t.proto = last.proto.clone();
+                        t.codec = last.codec.clone();
+                        t.port = last.port;
+                    }
+                    t.name = format!("Receiver {}", c.targets.len() + 1);
+                    c.targets.push(t);
+                    restart = true;
+                }
+                let on: usize = c.targets.iter().filter(|t| t.enabled).count();
+                ui.label(RichText::new(format!("{on} of {} enabled. Bandwidth includes the IP/UDP (or TCP) headers.", c.targets.len())).small().color(look::DIM));
+            });
+        });
+        restart
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
         if self.first {
             self.first = false;
             if self.s.mpx.autostart {
                 self.start();
             }
         }
-        // RadioText follows the file that is playing
+        // RadioText follows the file that is playing or the stream's song title
         if let (Some(src), Some(m)) = (&self.src, &self.mpx) {
             let now = src.now();
             if !now.is_empty() && now != self.last_now {
@@ -113,154 +401,47 @@ impl eframe::App for App {
                 self.last_now = now;
             }
         }
-        egui::CentralPanel::default().show(ctx, |ui| {
+        let links: Vec<(IpTarget, LinkStat)> = self.mpx.as_ref().map(|m| m.links()).unwrap_or_default();
+        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(16.0, 10.0))).show(ctx, |ui| {
+            self.header(ui);
+        });
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(14.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.heading("RadioMoon MPX Transmitter");
-                ui.label("Audio source -> FM multiplex (stereo, pilot, RDS) -> 192 kHz sound card and / or IP.");
-                ui.add_space(6.0);
-                let mut ch = false; // changes that can be applied while running
+                let mut ch = false; // changes applied while running
                 let mut restart = false; // changes of the source or the outputs
-                ui.group(|ui| {
-                    ui.label(RichText::new("Audio source").strong());
-                    ui.horizontal(|ui| {
-                        restart |= ui.radio_value(&mut self.s.kind, "folder".to_string(), "Folder of audio files").changed();
-                        restart |= ui.radio_value(&mut self.s.kind, "stream".to_string(), "Internet stream").changed();
-                        restart |= ui.radio_value(&mut self.s.kind, "input".to_string(), "Sound input").changed();
+                self.overview(ui, &links);
+                let wide = ui.available_width() >= 900.0;
+                if wide {
+                    ui.columns(2, |cols| {
+                        restart |= self.source_card(&mut cols[0]);
+                        ch |= self.signal_card(&mut cols[0]);
+                        ch |= self.rds_card(&mut cols[0]);
+                        restart |= self.card_output(&mut cols[1]);
+                        restart |= self.ip_card(&mut cols[1], &links);
                     });
-                    match self.s.kind.as_str() {
-                        "folder" => {
-                            ui.horizontal(|ui| {
-                                ui.label("Folder");
-                                restart |= ui.add(egui::TextEdit::singleline(&mut self.s.folder).desired_width((ui.available_width() - 100.0).max(100.0))).changed();
-                                if ui.button("Browse...").clicked() {
-                                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                                        self.s.folder = p.to_string_lossy().to_string();
-                                        restart = true;
-                                    }
-                                }
-                            });
-                            restart |= ui.checkbox(&mut self.s.shuffle, "Random order (a different order at every start)").changed();
-                        }
-                        "stream" => {
-                            ui.horizontal(|ui| {
-                                ui.label("Stream URL");
-                                restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).desired_width((ui.available_width() - 8.0).max(100.0))).changed();
-                            });
-                            ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS").small());
-                        }
-                        _ => {
-                            ui.horizontal(|ui| {
-                                ui.label("Sound input");
-                                restart |= combo(ui, "in", &mut self.s.device, &self.ins);
-                            });
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Level (dB)");
-                        restart |= ui.add(egui::Slider::new(&mut self.s.gain_db, -24.0..=12.0)).changed();
-                    });
-                });
-                ui.add_space(4.0);
-                ui.group(|ui| {
-                    ui.label(RichText::new("Outputs").strong());
-                    let c = &mut self.s.mpx;
-                    restart |= ui.checkbox(&mut c.card_on, "192 kHz sound card (MPX input of the exciter)").changed();
-                    ui.horizontal(|ui| {
-                        ui.label("Device");
-                        restart |= combo(ui, "out", &mut c.card_device, &self.outs);
-                    });
-                    restart |= ui.checkbox(&mut c.ip_on, "Send over IP (24-bit, 192 kHz)").changed();
-                    ui.horizontal(|ui| {
-                        ui.label("Format");
-                        restart |= ui.radio_value(&mut c.ip_codec, "l24".to_string(), "L24 uncompressed (4.6 Mbit/s)").changed();
-                        restart |= ui.radio_value(&mut c.ip_codec, "flac".to_string(), "FLAC lossless (bit-exact, about 3-4 Mbit/s)").changed();
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Protocol");
-                        restart |= ui.radio_value(&mut c.ip_proto, "udp".to_string(), "UDP (RTP)").changed();
-                        restart |= ui.radio_value(&mut c.ip_proto, "tcp".to_string(), "TCP").changed();
-                        ui.label("Address");
-                        restart |= ui.add(egui::TextEdit::singleline(&mut c.ip_host).desired_width(130.0)).changed();
-                        ui.label("Port");
-                        restart |= ui.add(egui::DragValue::new(&mut c.ip_port).range(1..=65535)).changed();
-                    });
-                });
-                ui.add_space(4.0);
-                ui.group(|ui| {
-                    ui.label(RichText::new("Signal").strong());
-                    let c = &mut self.s.mpx;
-                    let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
-                    ch |= ui.checkbox(&mut c.stereo, "Stereo (19 kHz pilot and 38 kHz subcarrier)").changed();
-                    ch |= ui.add(egui::Slider::new(&mut c.audio_level, 0.3..=1.0).custom_formatter(pct).text("Audio level")).changed();
-                    ch |= ui.add(egui::Slider::new(&mut c.pilot_level, 0.0..=0.12).custom_formatter(pct).text("Pilot level")).changed();
-                    ch |= ui.add(egui::Slider::new(&mut c.rds_level, 0.0..=0.08).custom_formatter(pct).text("RDS level")).changed();
-                    ch |= ui.add(egui::Slider::new(&mut c.output, 0.1..=1.0).custom_formatter(pct).text("Output level")).changed();
-                    ui.horizontal(|ui| {
-                        ui.label("Pre-emphasis");
-                        ch |= ui.radio_value(&mut c.preemph_us, 50.0, "50 us").changed();
-                        ch |= ui.radio_value(&mut c.preemph_us, 75.0, "75 us").changed();
-                        ch |= ui.radio_value(&mut c.preemph_us, 0.0, "Off").changed();
-                    });
-                    ch |= ui.checkbox(&mut c.limiter, "Peak limiter").changed();
-                });
-                ui.add_space(4.0);
-                ui.group(|ui| {
-                    ui.label(RichText::new("RDS").strong());
-                    let c = &mut self.s.mpx;
-                    ch |= ui.checkbox(&mut c.rds_on, "Send RDS").changed();
-                    ui.horizontal(|ui| {
-                        ui.label("PI (hex)");
-                        ch |= ui.add(egui::TextEdit::singleline(&mut c.pi).desired_width(60.0)).changed();
-                        ui.label("Station name (8 characters)");
-                        ch |= ui.add(egui::TextEdit::singleline(&mut c.ps).desired_width(110.0).char_limit(8)).changed();
-                        ui.label("PTY");
-                        ch |= ui.add(egui::DragValue::new(&mut c.pty).range(0..=31)).changed();
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("RadioText");
-                        ch |= ui.add(egui::TextEdit::singleline(&mut c.rt).desired_width(320.0).char_limit(64)).changed();
-                    });
-                    ch |= ui.checkbox(&mut c.rt_from_playlist, "RadioText from the song: file name (folder) or song title sent by the stream server").changed();
-                    ui.horizontal(|ui| {
-                        ch |= ui.checkbox(&mut c.tp, "TP").changed();
-                        ch |= ui.checkbox(&mut c.ta, "TA").changed();
-                        ch |= ui.checkbox(&mut c.music, "Music").changed();
-                    });
-                });
-                ui.add_space(4.0);
-                ui.checkbox(&mut self.s.mpx.autostart, "Start transmitting when the program starts").changed();
-                ui.add_space(6.0);
-                let running = self.mpx.is_some();
-                ui.horizontal(|ui| {
-                    if !running {
-                        if ui.button(RichText::new("  Start  ").size(16.0)).clicked() {
-                            self.start();
-                        }
-                    } else if ui.button(RichText::new("  Stop  ").size(16.0)).clicked() {
-                        self.stop();
-                    }
-                });
-                if restart && running {
-                    ui.label(RichText::new("The source and output changes are applied when you press Stop and Start.").small());
+                } else {
+                    restart |= self.source_card(ui);
+                    restart |= self.card_output(ui);
+                    restart |= self.ip_card(ui, &links);
+                    ch |= self.signal_card(ui);
+                    ch |= self.rds_card(ui);
                 }
-                ui.add_space(6.0);
-                match (&self.src, &self.mpx) {
-                    (Some(s), Some(m)) => {
-                        ui.colored_label(Color32::from_rgb(120, 230, 150), s.status());
-                        for l in m.status_lines() {
-                            ui.label(l);
-                        }
-                        let p = m.peak();
-                        ui.add(egui::ProgressBar::new(p.min(1.0)).desired_width(380.0).text(format!("{:.1} kHz  ({:.0}%)", p * 75.0, p * 100.0)));
-                        ui.add_space(6.0);
+                card(ui, "", |ui| {
+                    ch |= ui.checkbox(&mut self.s.mpx.autostart, "Start transmitting when the program starts").changed();
+                    if self.pending {
+                        ui.label(RichText::new("Source and output changes are applied when you press Stop and Start.").color(look::WARN));
+                    }
+                });
+                if let Some(m) = &self.mpx {
+                    card(ui, "Signal analysis", |ui| {
                         mpxscope::draw(ui, &m.scope);
-                        if ch {
-                            m.update(&self.s.mpx);
-                        }
+                    });
+                    if ch {
+                        m.update(&self.s.mpx);
                     }
-                    _ => {
-                        ui.label("Stopped");
-                    }
+                }
+                if restart && self.mpx.is_some() {
+                    self.pending = true;
                 }
                 if ch || restart {
                     self.persist();
@@ -276,32 +457,25 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result<()> {
-    let s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    s.mpx.migrate();
     let outs: Vec<String> = rodio::cpal::default_host().output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
     let ins = srcin::list_inputs();
-    let icon = image::load_from_memory(include_bytes!("../../packaging/icon.png")).map(|i| i.to_rgba8().into_raw()).unwrap_or_else(|_| vec![0; 256 * 256 * 4]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([660.0, 860.0])
-            .with_min_inner_size([560.0, 420.0])
+            .with_inner_size([1100.0, 900.0])
+            .with_min_inner_size([600.0, 480.0])
             .with_title("RadioMoon MPX Transmitter")
-            .with_icon(std::sync::Arc::new(egui::IconData { rgba: icon, width: 256, height: 256 })),
+            .with_icon(std::sync::Arc::new(look::icon())),
         ..Default::default()
     };
     eframe::run_native(
         "RadioMoon MPX Transmitter",
         options,
         Box::new(|cc| {
-            let mut fd = egui::FontDefinitions::default();
-            fd.font_data.insert("dejavu".into(), egui::FontData::from_static(include_bytes!("../../assets/fonts/DejaVuSans.ttf")));
-            fd.families.entry(egui::FontFamily::Proportional).or_default().push("dejavu".into());
-            cc.egui_ctx.set_fonts(fd);
-            cc.egui_ctx.set_theme(egui::Theme::Dark);
-            let mut v = egui::Visuals::dark();
-            v.override_text_color = Some(Color32::from_rgb(0xd6, 0xdc, 0xe4));
-            v.panel_fill = Color32::from_rgb(0x11, 0x15, 0x1b);
-            cc.egui_ctx.set_visuals(v);
-            Ok(Box::new(App { s, src: None, mpx: None, outs, ins, last_now: String::new(), first: true }))
+            look::apply_style(&cc.egui_ctx);
+            Ok(Box::new(App { s, src: None, mpx: None, outs, ins, last_now: String::new(), first: true, pending: false }))
         }),
     )
 }
+

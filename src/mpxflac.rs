@@ -15,8 +15,14 @@ pub const BPS: u32 = 24;
 /// follows (optional redundancy; the receiver uses it to restore a single lost packet exactly).
 pub const PT_L24: u8 = 97;
 pub const PT_FLAC: u8 = 98;
+/// Uncompressed 16-bit and 20-bit PCM (RTP L16 / L20 layout, big endian).
+pub const PT_L16: u8 = 99;
+pub const PT_L20: u8 = 100;
 /// Start of a FLAC stream over TCP; then every frame follows as a 16-bit length (big endian) and the frame.
 pub const TCP_FLAC_MAGIC: &[u8; 4] = b"RMF1";
+/// Start of an uncompressed 16- or 20-bit TCP stream: these 4 bytes, then one byte with the bits, then the PCM.
+/// (24-bit PCM over TCP has no start marker, as in the first versions.)
+pub const TCP_PCM_MAGIC: &[u8; 4] = b"RMP1";
 const MAX_LPC: usize = 32;
 const QLP_PRECISION: u32 = 15;
 
@@ -341,19 +347,29 @@ fn utf8_number(w: &mut BitWriter, v: u32) {
 /// Encodes one block of 24-bit samples (-8388608..=8388607) as a complete FLAC frame.
 /// `frame_no` is the frame number (fixed block size stream); the block length may be 1..=65536.
 pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
+    encode_frame_bits(samples, frame_no, BPS)
+}
+
+/// Same as `encode_frame` for 16-, 20- or 24-bit samples (the samples are in the range of that bit depth).
+pub fn encode_frame_bits(samples: &[i32], frame_no: u32, bits: u32) -> Vec<u8> {
+    let bps = match bits {
+        16 | 20 => bits,
+        _ => BPS,
+    };
+    let (lo, hi) = (-(1i64 << (bps - 1)), (1i64 << (bps - 1)) - 1);
     let n = samples.len();
-    let x: Vec<i64> = samples.iter().map(|&s| s.clamp(-8_388_608, 8_388_607) as i64).collect();
+    let x: Vec<i64> = samples.iter().map(|&s| (s as i64).clamp(lo, hi)).collect();
 
     // choose the smallest subframe
-    let verbatim_bits = n as u64 * BPS as u64;
+    let verbatim_bits = n as u64 * bps as u64;
     let mut best: (u64, Sub, Vec<i64>, u32, Vec<u32>) = (verbatim_bits, Sub::Verbatim, Vec::new(), 0, Vec::new());
     if n > 0 && x.iter().all(|&v| v == x[0]) {
-        best = (BPS as u64, Sub::Constant, Vec::new(), 0, Vec::new());
+        best = (bps as u64, Sub::Constant, Vec::new(), 0, Vec::new());
     } else {
         for order in 0..=4usize.min(n.saturating_sub(1)) {
             let res = fixed_residual(&x, order);
             let (bits, po, params) = plan_residual(&res, order);
-            let total = bits.saturating_add(order as u64 * BPS as u64);
+            let total = bits.saturating_add(order as u64 * bps as u64);
             if total < best.0 {
                 best = (total, Sub::Fixed(order), res, po, params);
             }
@@ -368,7 +384,7 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
                     continue;
                 }
                 let (bits, po, params) = plan_residual(&res, order);
-                let total = bits.saturating_add(order as u64 * (BPS as u64 + QLP_PRECISION as u64) + 4 + 5);
+                let total = bits.saturating_add(order as u64 * (bps as u64 + QLP_PRECISION as u64) + 4 + 5);
                 if total < best.0 {
                     best = (total, Sub::Lpc(q, shift), res, po, params);
                 }
@@ -384,7 +400,7 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
     w.put(0b0111, 4); // block size: 16 bits at end of header
     w.put(0b0011, 4); // 192 kHz
     w.put(0b0000, 4); // mono
-    w.put(0b110, 3); // 24 bits
+    w.put(match bps { 16 => 0b100, 20 => 0b101, _ => 0b110 }, 3); // bits per sample
     w.put(0, 1);
     utf8_number(&mut w, frame_no);
     w.put((n - 1) as u64, 16);
@@ -394,18 +410,18 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
     match &best.1 {
         Sub::Constant => {
             w.put(0, 8);
-            w.put_signed(x[0], BPS);
+            w.put_signed(x[0], bps);
         }
         Sub::Verbatim => {
             w.put(0b00000010, 8);
             for &v in &x {
-                w.put_signed(v, BPS);
+                w.put_signed(v, bps);
             }
         }
         Sub::Fixed(order) => {
             w.put((0b001000 | *order as u64) << 1, 8);
             for &v in &x[..*order] {
-                w.put_signed(v, BPS);
+                w.put_signed(v, bps);
             }
             write_residual(&mut w, &best.2, *order, best.3, &best.4);
         }
@@ -413,7 +429,7 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
             let order = q.len();
             w.put((0b100000 | (order as u64 - 1)) << 1, 8);
             for &v in &x[..order] {
-                w.put_signed(v, BPS);
+                w.put_signed(v, bps);
             }
             w.put(QLP_PRECISION as u64 - 1, 4);
             w.put(*shift as u64, 5);
@@ -435,6 +451,9 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
 /// Result of decoding: the frame number and the samples (24-bit range).
 pub struct Decoded {
     pub frame_no: u32,
+    /// Bits per sample of the frame (16, 20 or 24).
+    pub bits: u32,
+    /// Samples in the range of `bits`.
     pub samples: Vec<i32>,
 }
 
@@ -621,7 +640,7 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
         return None;
     }
     let samples = x.iter().map(|&v| (v << wasted) as i32).collect();
-    Some(Decoded { frame_no, samples })
+    Some(Decoded { frame_no, bits: bps, samples })
 }
 
 // ---------------------------------------------------------------- float helpers (same scaling as the L24 path)
@@ -632,6 +651,102 @@ pub fn to_i24(samples: &[f32], out: &mut Vec<i32>) {
 
 pub fn from_i24(samples: &[i32], out: &mut Vec<f32>) {
     out.extend(samples.iter().map(|&v| v as f32 / 8_388_607.0));
+}
+
+/// Samples of `bits` bits back to floating point (same scale as the L24 path).
+pub fn from_bits(samples: &[i32], bits: u32, out: &mut Vec<f32>) {
+    if bits >= 24 {
+        return from_i24(samples, out);
+    }
+    let full = ((1i64 << (bits - 1)) - 1) as f32;
+    out.extend(samples.iter().map(|&v| v as f32 / full));
+}
+
+/// Floating point to 16, 20 or 24 bits. 24 bits: the same exact conversion as before (no dither). 16 and 20 bits:
+/// with TPDF dither of +-1 step, so the rounding error becomes plain low-level noise instead of distortion.
+pub struct Quantizer {
+    pub bits: u32,
+    seed: u32,
+}
+
+impl Quantizer {
+    pub fn new(bits: u32) -> Self {
+        Quantizer { bits: if bits == 16 || bits == 20 { bits } else { 24 }, seed: 0x1234_5678 }
+    }
+    fn rnd(&mut self) -> f32 {
+        self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (self.seed >> 8) as f32 / (1u32 << 24) as f32
+    }
+    pub fn run(&mut self, samples: &[f32], out: &mut Vec<i32>) {
+        if self.bits >= 24 {
+            return to_i24(samples, out);
+        }
+        let full = ((1i64 << (self.bits - 1)) - 1) as f32;
+        let (lo, hi) = (-full - 1.0, full);
+        for &s in samples {
+            let d = self.rnd() - self.rnd();
+            out.push((s.clamp(-1.0, 1.0) * full + d).round().clamp(lo, hi) as i32);
+        }
+    }
+}
+
+/// Packs samples as big-endian PCM of 16, 20 (two samples in 5 bytes, RFC 3190) or 24 bits.
+pub fn pack_pcm(samples: &[i32], bits: u32, out: &mut Vec<u8>) {
+    match bits {
+        16 => {
+            for &v in samples {
+                out.extend_from_slice(&(v as i16).to_be_bytes());
+            }
+        }
+        20 => {
+            for pair in samples.chunks(2) {
+                let a = (pair[0] as u32) & 0xF_FFFF;
+                let b = (pair.get(1).copied().unwrap_or(0) as u32) & 0xF_FFFF;
+                let v = ((a as u64) << 20) | b as u64;
+                out.extend_from_slice(&v.to_be_bytes()[3..]);
+            }
+        }
+        _ => {
+            for &v in samples {
+                out.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+            }
+        }
+    }
+}
+
+/// Reverse of `pack_pcm`; returns the samples as floating point.
+pub fn unpack_pcm(bytes: &[u8], bits: u32, out: &mut Vec<f32>) {
+    let mut v: Vec<i32> = Vec::with_capacity(bytes.len() / 2);
+    match bits {
+        16 => {
+            for c in bytes.chunks_exact(2) {
+                v.push(i16::from_be_bytes([c[0], c[1]]) as i32);
+            }
+        }
+        20 => {
+            for c in bytes.chunks_exact(5) {
+                let x = u64::from_be_bytes([0, 0, 0, c[0], c[1], c[2], c[3], c[4]]);
+                let sx = |u: u64| ((((u & 0xF_FFFF) as u32) << 12) as i32) >> 12;
+                v.push(sx(x >> 20));
+                v.push(sx(x));
+            }
+        }
+        _ => {
+            for c in bytes.chunks_exact(3) {
+                v.push((((c[0] as i32) << 24) | ((c[1] as i32) << 16) | ((c[2] as i32) << 8)) >> 8);
+            }
+        }
+    }
+    from_bits(&v, bits, out);
+}
+
+/// Bytes per packet unit for `pack_pcm` (20-bit samples come in pairs of 5 bytes).
+pub fn pcm_unit(bits: u32) -> usize {
+    match bits {
+        16 => 2,
+        20 => 5,
+        _ => 3,
+    }
 }
 
 /// The FLAC stream header (marker + STREAMINFO) for a 24-bit mono 192 kHz stream; put in front of the frames it
@@ -673,6 +788,8 @@ pub struct RxStats {
     /// packets that came too late or twice (ignored)
     pub late: u64,
     pub flac: bool,
+    /// Bits per sample of the stream (16, 20 or 24).
+    pub bits: u32,
 }
 
 /// Keeps the last `BLOCK` output samples. Because BLOCK is a multiple of 192 samples, repeating them continues the
@@ -770,7 +887,10 @@ impl Depacketizer {
                 return true;
             };
             match decode_frame(frame) {
-                Some(d) => from_i24(&d.samples, &mut cur),
+                Some(d) => {
+                    self.stats.bits = d.bits;
+                    from_bits(&d.samples, d.bits, &mut cur)
+                }
                 None => {
                     self.stats.bad += 1; // treated like a lost packet: the next one restores or conceals it
                     return true;
@@ -779,16 +899,19 @@ impl Depacketizer {
             if payload[0] & 1 != 0 {
                 if let Some(d) = decode_frame(&payload[3 + len..]) {
                     let mut p = Vec::with_capacity(d.samples.len());
-                    from_i24(&d.samples, &mut p);
+                    from_bits(&d.samples, d.bits, &mut p);
                     prev = Some(p);
                 }
             }
         } else {
             self.stats.flac = false;
-            for c in payload.chunks_exact(3) {
-                let v = (((c[0] as i32) << 24) | ((c[1] as i32) << 16) | ((c[2] as i32) << 8)) >> 8;
-                cur.push(v as f32 / 8_388_607.0);
-            }
+            let bits = match pt {
+                PT_L16 => 16,
+                PT_L20 => 20,
+                _ => 24,
+            };
+            self.stats.bits = bits;
+            unpack_pcm(payload, bits, &mut cur);
         }
         if cur.is_empty() {
             return true;
@@ -830,6 +953,7 @@ impl Depacketizer {
 /// Reads a TCP stream: FLAC when it starts with TCP_FLAC_MAGIC, otherwise raw L24.
 pub struct TcpDeframer {
     flac: Option<bool>,
+    bits: u32,
     rest: Vec<u8>,
     pub stats: RxStats,
 }
@@ -842,7 +966,7 @@ impl Default for TcpDeframer {
 
 impl TcpDeframer {
     pub fn new() -> Self {
-        TcpDeframer { flac: None, rest: Vec::new(), stats: RxStats::default() }
+        TcpDeframer { flac: None, bits: 24, rest: Vec::new(), stats: RxStats::default() }
     }
 
     pub fn feed(&mut self, data: &[u8], out: &mut Vec<f32>) {
@@ -854,9 +978,20 @@ impl TcpDeframer {
             let f = &self.rest[..4] == TCP_FLAC_MAGIC;
             if f {
                 self.rest.drain(..4);
+            } else if &self.rest[..4] == TCP_PCM_MAGIC {
+                if self.rest.len() < 5 {
+                    return;
+                }
+                self.bits = match self.rest[4] {
+                    16 => 16,
+                    20 => 20,
+                    _ => 24,
+                };
+                self.rest.drain(..5);
             }
             self.flac = Some(f);
             self.stats.flac = f;
+            self.stats.bits = self.bits;
         }
         if self.flac == Some(true) {
             let mut at = 0;
@@ -867,7 +1002,8 @@ impl TcpDeframer {
                 }
                 match decode_frame(&self.rest[at + 2..at + 2 + len]) {
                     Some(d) => {
-                        from_i24(&d.samples, out);
+                        from_bits(&d.samples, d.bits, out);
+                        self.stats.bits = d.bits;
                         self.stats.packets += 1;
                     }
                     None => self.stats.bad += 1,
@@ -876,11 +1012,9 @@ impl TcpDeframer {
             }
             self.rest.drain(..at);
         } else {
-            let usable = self.rest.len() / 3 * 3;
-            for c in self.rest[..usable].chunks_exact(3) {
-                let v = (((c[0] as i32) << 24) | ((c[1] as i32) << 16) | ((c[2] as i32) << 8)) >> 8;
-                out.push(v as f32 / 8_388_607.0);
-            }
+            let unit = pcm_unit(self.bits);
+            let usable = self.rest.len() / unit * unit;
+            unpack_pcm(&self.rest[..usable], self.bits, out);
             self.rest.drain(..usable);
         }
     }
@@ -1095,5 +1229,76 @@ mod tests {
         }
         assert!(!t.stats.flac);
         assert_eq!(out, as_f32(&x));
+    }
+
+    #[test]
+    fn flac_16_and_20_bit_are_exact() {
+        for bits in [16u32, 20] {
+            let x24 = mpx_like(BLOCK * 50, 11);
+            let x: Vec<i32> = x24.iter().map(|&v| v >> (24 - bits)).collect();
+            let mut total = 0;
+            for (no, b) in x.chunks(BLOCK).enumerate() {
+                let f = encode_frame_bits(b, no as u32, bits);
+                total += f.len();
+                let d = decode_frame(&f).unwrap();
+                assert_eq!(d.bits, bits);
+                assert_eq!(d.samples, b);
+            }
+            eprintln!("{bits}-bit FLAC: ratio {:.2} against L{bits}", (x.len() as f64 * bits as f64 / 8.0) / total as f64);
+        }
+    }
+
+    #[test]
+    fn pcm_pack_roundtrip() {
+        for bits in [16u32, 20, 24] {
+            let mut q = Quantizer::new(bits);
+            let src: Vec<f32> = (0..480).map(|i| ((i as f32) * 0.37).sin() * 0.9).collect();
+            let mut ints = Vec::new();
+            q.run(&src, &mut ints);
+            let mut bytes = Vec::new();
+            pack_pcm(&ints, bits, &mut bytes);
+            assert_eq!(bytes.len(), 480 * bits as usize / 8);
+            let mut back = Vec::new();
+            unpack_pcm(&bytes, bits, &mut back);
+            let mut exp = Vec::new();
+            from_bits(&ints, bits, &mut exp);
+            assert_eq!(back, exp, "{bits}");
+            let err = src.iter().zip(&back).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(err < 2.5 / (1u32 << (bits - 1)) as f32, "{bits}-bit error {err}");
+        }
+    }
+
+    #[test]
+    fn rtp_l16_and_tcp_l20() {
+        let src: Vec<f32> = (0..240 * 4).map(|i| ((i as f32) * 0.11).sin() * 0.5).collect();
+        let mut q = Quantizer::new(16);
+        let mut ints = Vec::new();
+        q.run(&src, &mut ints);
+        let mut d = Depacketizer::new();
+        let mut out = Vec::new();
+        for (i, b) in ints.chunks(240).enumerate() {
+            let mut pl = Vec::new();
+            pack_pcm(b, 16, &mut pl);
+            d.packet(&rtp(PT_L16, i as u16, (i * 240) as u32, &pl), &mut out);
+        }
+        let mut exp = Vec::new();
+        from_bits(&ints, 16, &mut exp);
+        assert_eq!(out, exp);
+        assert_eq!(d.stats.bits, 16);
+        let mut q = Quantizer::new(20);
+        let mut ints = Vec::new();
+        q.run(&src, &mut ints);
+        let mut stream = TCP_PCM_MAGIC.to_vec();
+        stream.push(20);
+        pack_pcm(&ints, 20, &mut stream);
+        let mut t = TcpDeframer::new();
+        let mut out = Vec::new();
+        for piece in stream.chunks(7) {
+            t.feed(piece, &mut out);
+        }
+        let mut exp = Vec::new();
+        from_bits(&ints, 20, &mut exp);
+        assert_eq!(out, exp);
+        assert_eq!((t.stats.bits, t.stats.flac), (20, false));
     }
 }
