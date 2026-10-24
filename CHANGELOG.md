@@ -2,6 +2,12 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.2.0
+- Smaller, more compact windows: smaller text, buttons, cards, graphs and analyzer, so more fits on the screen.
+- Each program has its own icon: a blue transmitter tower for the MPX Transmitter, a green receiving dish for the MPX Receiver (window, taskbar, .exe file, Start menu and macOS apps).
+- About window in both programs (version, features, authors, project link).
+- Windows: the .exe files carry version information (Properties > Details).
+
 ## 1.1.0
 - **Several receivers at once:** the Transmitter sends the MPX to any number of IP outputs (Add receiver), each with its own name, address, port, protocol (UDP RTP or TCP), format and QoS. Each output runs on its own, so a slow or unreachable receiver never disturbs the others. A single receiver of older settings is taken over automatically.
 - **Bit depth per output:** 24-bit (full quality), 20-bit or 16-bit, as uncompressed PCM (L24 / L20 / L16) or FLAC lossless. The sample rate stays 192 kHz (needed for the 19, 38 and 57 kHz carriers). 16 and 20 bits use TPDF dither. Typical bandwidth: L24 4.9, L20 4.0, L16 3.3, FLAC 24-bit about 3.7, FLAC 20-bit about 3.0, FLAC 16-bit about 2.2 Mbit/s.

@@ -61,6 +61,9 @@ struct App {
     first: bool,
     /// Settings that only apply after Stop / Start were changed while running.
     pending: bool,
+    about: bool,
+    about_tex: Option<egui::TextureHandle>,
+    logo_tex: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -82,6 +85,18 @@ impl App {
             s.stop();
         }
         self.pending = false;
+    }
+
+    /// Small program icon for the header.
+    fn logo(&mut self, ctx: &egui::Context) -> egui::TextureId {
+        if self.logo_tex.is_none() {
+            if let Ok(img) = image::load_from_memory(look::TRANSMITTER_ICON) {
+                let img = img.resize(64, 64, image::imageops::FilterType::Lanczos3).to_rgba8();
+                let size = [img.width() as usize, img.height() as usize];
+                self.logo_tex = Some(ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR));
+            }
+        }
+        self.logo_tex.as_ref().map(|t| t.id()).unwrap_or_default()
     }
 
     fn persist(&self) {
@@ -112,9 +127,13 @@ impl App {
     // ------------------------------------------------------------ header
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("RadioMoon MPX Transmitter").size(19.0).strong());
+            ui.add(egui::Image::new((self.logo(ui.ctx()), egui::vec2(20.0, 20.0))));
+            ui.label(RichText::new("RadioMoon MPX Transmitter").size(15.0).strong());
             ui.label(RichText::new(format!("v{VERSION}")).small().color(look::DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("About").clicked() {
+                    self.about = true;
+                }
                 if self.mpx.is_none() {
                     if look::primary_button(ui, "▶  Start").clicked() {
                         self.start();
@@ -144,7 +163,7 @@ impl App {
             let total: f32 = links.iter().map(|(_, l)| l.mbps).sum();
             let up = links.iter().filter(|(_, l)| l.ok).count();
             ui.horizontal_wrapped(|ui| {
-                tile(ui, "Deviation peak", &format!("{:.1}", m.peak() * 75.0), "kHz", if m.peak() > 1.0 { look::BAD } else { look::TEXT }, 120.0);
+                tile(ui, "Deviation peak", &format!("{:.1}", m.peak() * 75.0), "kHz", if m.peak() > 1.0 { look::BAD } else { look::TEXT }, 110.0);
                 tile(ui, "IP bandwidth (total)", &look::mbps(total), "Mbit/s", look::ACCENT, 150.0);
                 tile(ui, "IP outputs", &format!("{up} / {}", links.len()), "working", if up == links.len() { look::GOOD } else { look::WARN }, 120.0);
                 let card_on = !m.card_status().is_empty();
@@ -306,26 +325,26 @@ impl App {
                         };
                         look::dot(ui, color);
                         restart |= ui.checkbox(&mut t.enabled, "").on_hover_text("Send to this receiver").changed();
-                        restart |= ui.add(egui::TextEdit::singleline(&mut t.name).hint_text("Name (site)").desired_width(150.0)).changed();
+                        restart |= ui.add(egui::TextEdit::singleline(&mut t.name).hint_text("Name (site)").desired_width(130.0)).changed();
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if n > 1 && ui.small_button("✖").on_hover_text("Remove this receiver").clicked() {
                                 remove = Some(i);
                             }
                             if let Some(l) = live {
-                                ui.label(RichText::new(format!("{} Mbit/s", look::mbps(l.mbps))).strong().size(15.0).color(look::ACCENT));
+                                ui.label(RichText::new(format!("{} Mbit/s", look::mbps(l.mbps))).strong().size(12.5).color(look::ACCENT));
                             }
                         });
                     });
                     ui.horizontal_wrapped(|ui| {
                         cap(ui, "Address");
-                        restart |= ui.add(egui::TextEdit::singleline(&mut t.host).hint_text("IP or host name").desired_width(140.0)).changed();
+                        restart |= ui.add(egui::TextEdit::singleline(&mut t.host).hint_text("IP or host name").desired_width(120.0)).changed();
                         cap(ui, "Port");
                         restart |= ui.add(egui::DragValue::new(&mut t.port).range(1..=65535)).changed();
-                        egui::ComboBox::from_id_salt(("proto", i)).width(100.0).selected_text(if t.proto == "tcp" { "TCP" } else { "UDP (RTP)" }).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("proto", i)).width(82.0).selected_text(if t.proto == "tcp" { "TCP" } else { "UDP (RTP)" }).show_ui(ui, |ui| {
                             restart |= ui.selectable_value(&mut t.proto, "udp".to_string(), "UDP (RTP)").changed();
                             restart |= ui.selectable_value(&mut t.proto, "tcp".to_string(), "TCP").changed();
                         });
-                        egui::ComboBox::from_id_salt(("codec", i)).width(130.0).selected_text(if t.codec == "flac" { "FLAC lossless" } else { "PCM uncompressed" }).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("codec", i)).width(112.0).selected_text(if t.codec == "flac" { "FLAC lossless" } else { "PCM uncompressed" }).show_ui(ui, |ui| {
                             restart |= ui.selectable_value(&mut t.codec, "flac".to_string(), "FLAC lossless").changed();
                             restart |= ui.selectable_value(&mut t.codec, "l24".to_string(), "PCM uncompressed").changed();
                         });
@@ -335,13 +354,13 @@ impl App {
                             if codec == "flac" { pcm * 0.8 } else { pcm }
                         };
                         let shown_bits = t.bits();
-                        egui::ComboBox::from_id_salt(("bits", i)).width(170.0).selected_text(format!("{shown_bits}-bit, 192 kHz")).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("bits", i)).width(120.0).selected_text(format!("{shown_bits}-bit, 192 kHz")).show_ui(ui, |ui| {
                             for b in [24u32, 20, 16] {
                                 let txt = format!("{b}-bit (about {:.1} Mbit/s)", est(&t.codec, b));
                                 restart |= ui.selectable_value(&mut t.bits, b, txt).changed();
                             }
                         });
-                        egui::ComboBox::from_id_salt(("dscp", i)).width(110.0).selected_text(format!("QoS {}", t.dscp_name())).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("dscp", i)).width(80.0).selected_text(format!("QoS {}", t.dscp_name())).show_ui(ui, |ui| {
                             for (v, name) in [(46u8, "EF (46): real-time audio, recommended"), (34, "AF41 (34): AES67 audio"), (40, "CS5 (40)"), (48, "CS6 (48)"), (0, "Off: no marking")] {
                                 restart |= ui.selectable_value(&mut t.dscp, v, name).changed();
                             }
@@ -353,7 +372,7 @@ impl App {
                     if let Some(l) = live {
                         let saving = if t.codec == "flac" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
-                        look::sparkline(ui, &l.hist, 46.0, look::ACCENT);
+                        look::sparkline(ui, &l.hist, 32.0, look::ACCENT);
                     } else if running && t.enabled && ip_on {
                         ui.label(RichText::new("Changed: applied when you press Stop and Start").small().color(look::WARN));
                     }
@@ -402,15 +421,33 @@ impl eframe::App for App {
             }
         }
         let links: Vec<(IpTarget, LinkStat)> = self.mpx.as_ref().map(|m| m.links()).unwrap_or_default();
-        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(16.0, 10.0))).show(ctx, |ui| {
+        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
             self.header(ui);
         });
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(14.0)).show(ctx, |ui| {
+        look::about_window(
+            ctx,
+            &mut self.about,
+            &mut self.about_tex,
+            &look::About {
+                name: "RadioMoon MPX Transmitter",
+                tagline: "FM multiplex generator with RDS, sent to sound cards and over IP",
+                features: &[
+                    "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
+                    "Folder, internet stream or sound input as the source",
+                    "Any number of IP receivers: UDP or TCP, L16/L20/L24 or FLAC lossless",
+                    "QoS (DSCP) marking, live bandwidth per receiver",
+                    "192 kHz sound card output and signal analyzer",
+                ],
+                png: look::TRANSMITTER_ICON,
+                version: VERSION,
+            },
+        );
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false; // changes applied while running
                 let mut restart = false; // changes of the source or the outputs
                 self.overview(ui, &links);
-                let wide = ui.available_width() >= 900.0;
+                let wide = ui.available_width() >= 760.0;
                 if wide {
                     ui.columns(2, |cols| {
                         restart |= self.source_card(&mut cols[0]);
@@ -463,10 +500,10 @@ fn main() -> eframe::Result<()> {
     let ins = srcin::list_inputs();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 900.0])
-            .with_min_inner_size([600.0, 480.0])
+            .with_inner_size([900.0, 760.0])
+            .with_min_inner_size([520.0, 400.0])
             .with_title("RadioMoon MPX Transmitter")
-            .with_icon(std::sync::Arc::new(look::icon())),
+            .with_icon(std::sync::Arc::new(look::icon(look::TRANSMITTER_ICON))),
         ..Default::default()
     };
     eframe::run_native(
@@ -474,7 +511,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             look::apply_style(&cc.egui_ctx);
-            Ok(Box::new(App { s, src: None, mpx: None, outs, ins, last_now: String::new(), first: true, pending: false }))
+            Ok(Box::new(App { s, src: None, mpx: None, outs, ins, last_now: String::new(), first: true, pending: false, about: false, about_tex: None, logo_tex: None }))
         }),
     )
 }

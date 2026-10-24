@@ -70,16 +70,19 @@ pub fn apply_style(ctx: &egui::Context) {
     ctx.set_fonts(fd);
     let mut style = (*ctx.style()).clone();
     style.text_styles = std::collections::BTreeMap::from([
-        (TextStyle::Heading, FontId::new(19.0, FontFamily::Proportional)),
-        (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
-        (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
+        (TextStyle::Heading, FontId::new(15.0, FontFamily::Proportional)),
+        (TextStyle::Body, FontId::new(12.5, FontFamily::Proportional)),
+        (TextStyle::Monospace, FontId::new(11.5, FontFamily::Monospace)),
+        (TextStyle::Button, FontId::new(12.5, FontFamily::Proportional)),
+        (TextStyle::Small, FontId::new(10.5, FontFamily::Proportional)),
     ]);
-    style.spacing.item_spacing = vec2(8.0, 6.0);
-    style.spacing.button_padding = vec2(10.0, 4.0);
-    style.spacing.interact_size.y = 26.0;
-    style.spacing.slider_width = 170.0;
+    style.spacing.item_spacing = vec2(6.0, 4.0);
+    style.spacing.button_padding = vec2(8.0, 2.0);
+    style.spacing.interact_size = vec2(36.0, 21.0);
+    style.spacing.icon_width = 13.0;
+    style.spacing.icon_width_inner = 7.0;
+    style.spacing.slider_width = 140.0;
+    style.spacing.combo_height = 220.0;
     style.visuals = visuals();
     ctx.set_style(style);
 }
@@ -88,35 +91,36 @@ pub fn apply_style(ctx: &egui::Context) {
 pub fn card<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     let r = egui::Frame::none()
         .fill(CARD)
-        .rounding(8.0)
+        .rounding(6.0)
         .stroke(Stroke::new(1.0_f32, BORDER))
-        .inner_margin(14.0)
+        .inner_margin(10.0)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if !title.is_empty() {
-                ui.label(RichText::new(title).strong().size(13.5).color(ACCENT));
-                ui.add_space(4.0);
+                ui.label(RichText::new(title).strong().size(12.0).color(ACCENT));
+                ui.add_space(2.0);
             }
             add(ui)
         })
         .inner;
-    ui.add_space(8.0);
+    ui.add_space(6.0);
     r
 }
 
 /// A darker box inside a card (one IP output, one value tile).
 pub fn inset<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    egui::Frame::none().fill(INSET).rounding(6.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(10.0).show(ui, add).inner
+    egui::Frame::none().fill(INSET).rounding(5.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(7.0).show(ui, add).inner
 }
 
 /// A value tile: small caption, large number, unit.
 pub fn tile(ui: &mut Ui, caption: &str, value: &str, unit: &str, color: Color32, width: f32) {
-    egui::Frame::none().fill(INSET).rounding(6.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::symmetric(12.0, 8.0)).show(ui, |ui| {
-        ui.set_width(width);
+    egui::Frame::none().fill(INSET).rounding(5.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::symmetric(8.0, 5.0)).show(ui, |ui| {
+        ui.set_width(width * 0.8);
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             ui.label(RichText::new(caption).small().color(DIM));
             ui.horizontal(|ui| {
-                ui.label(RichText::new(value).size(22.0).strong().color(color));
+                ui.label(RichText::new(value).size(16.0).strong().color(color));
                 if !unit.is_empty() {
                     ui.label(RichText::new(unit).color(DIM));
                 }
@@ -130,31 +134,31 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) {
     egui::Frame::none()
         .fill(color.gamma_multiply(0.18))
         .stroke(Stroke::new(1.0_f32, color))
-        .rounding(12.0)
-        .inner_margin(egui::Margin::symmetric(10.0, 3.0))
+        .rounding(10.0)
+        .inner_margin(egui::Margin::symmetric(8.0, 1.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).strong().size(12.5).color(color));
+            ui.label(RichText::new(text).strong().size(10.5).color(color));
         });
 }
 
 /// A small round state light.
 pub fn dot(ui: &mut Ui, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-    ui.painter().circle_filled(rect.center(), 5.0, color);
+    let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
 }
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE).strong().size(15.0)).fill(Color32::from_rgb(0x1f, 0x8f, 0x55)).rounding(6.0).min_size(vec2(110.0, 32.0)))
+    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE).strong().size(12.5)).fill(Color32::from_rgb(0x1f, 0x8f, 0x55)).rounding(5.0).min_size(vec2(80.0, 24.0)))
 }
 
 pub fn danger_button(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE).strong().size(15.0)).fill(Color32::from_rgb(160, 45, 50)).rounding(6.0).min_size(vec2(110.0, 32.0)))
+    ui.add(egui::Button::new(RichText::new(text).color(Color32::WHITE).strong().size(12.5)).fill(Color32::from_rgb(160, 45, 50)).rounding(5.0).min_size(vec2(80.0, 24.0)))
 }
 
 /// Deviation bar: 0..125%, green below 100%, red above.
 pub fn deviation_bar(ui: &mut Ui, peak: f32) {
     let w = ui.available_width().max(120.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 16.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 4.0, INSET);
     let x_of = |v: f32| rect.left() + (v.clamp(0.0, 1.25) / 1.25) * rect.width();
@@ -163,8 +167,8 @@ pub fn deviation_bar(ui: &mut Ui, peak: f32) {
     p.rect_filled(fill, 4.0, c.gamma_multiply(0.85));
     let x100 = x_of(1.0);
     p.line_segment([pos2(x100, rect.top()), pos2(x100, rect.bottom())], Stroke::new(1.5_f32, BAD));
-    p.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{:.1} kHz  ({:.0}%)", peak * 75.0, peak * 100.0), FontId::proportional(12.5), Color32::WHITE);
-    p.text(pos2(x100 - 4.0, rect.center().y), Align2::RIGHT_CENTER, "75 kHz", FontId::proportional(10.5), Color32::from_rgb(255, 200, 200));
+    p.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{:.1} kHz  ({:.0}%)", peak * 75.0, peak * 100.0), FontId::proportional(10.5), Color32::WHITE);
+    p.text(pos2(x100 - 4.0, rect.center().y), Align2::RIGHT_CENTER, "75 kHz", FontId::proportional(9.5), Color32::from_rgb(255, 200, 200));
 }
 
 /// Bandwidth history graph (Mbit/s) with its scale.
@@ -206,8 +210,115 @@ pub fn mbps(v: f32) -> String {
     format!("{v:.2}")
 }
 
-/// Program icon for the window.
-pub fn icon() -> egui::IconData {
-    let rgba = image::load_from_memory(include_bytes!("../packaging/icon.png")).map(|i| i.to_rgba8().into_raw()).unwrap_or_else(|_| vec![0; 256 * 256 * 4]);
-    egui::IconData { rgba, width: 256, height: 256 }
+pub const TRANSMITTER_ICON: &[u8] = include_bytes!("../packaging/transmitter.png");
+pub const RECEIVER_ICON: &[u8] = include_bytes!("../packaging/receiver.png");
+
+/// Program icon for the window (PNG bytes, e.g. `TRANSMITTER_ICON`).
+pub fn icon(png: &[u8]) -> egui::IconData {
+    match image::load_from_memory(png) {
+        Ok(i) => {
+            let i = i.to_rgba8();
+            egui::IconData { width: i.width(), height: i.height(), rgba: i.into_raw() }
+        }
+        Err(_) => egui::IconData { rgba: vec![0; 4], width: 1, height: 1 },
+    }
+}
+
+// ---------------------------------------------------------------- About window
+
+/// What the About window of a program shows.
+pub struct About {
+    pub name: &'static str,
+    pub tagline: &'static str,
+    pub features: &'static [&'static str],
+    /// The program icon (PNG).
+    pub png: &'static [u8],
+    pub version: &'static str,
+}
+
+/// Shows the About window while `open` is true. `tex` keeps the loaded logo between frames.
+pub fn about_window(ctx: &egui::Context, open: &mut bool, tex: &mut Option<egui::TextureHandle>, a: &About) {
+    if !*open {
+        return;
+    }
+    if tex.is_none() {
+        if let Ok(img) = image::load_from_memory(a.png) {
+            let img = img.to_rgba8();
+            let size = [img.width() as usize, img.height() as usize];
+            *tex = Some(ctx.load_texture("about-logo", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR));
+        }
+    }
+    let mut close = false;
+    let mut shown = true;
+    egui::Window::new(RichText::new("About").strong())
+        .open(&mut shown)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .fixed_size(vec2(380.0, 0.0))
+        .frame(egui::Frame::window(&ctx.style()).fill(CARD).stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.5))).inner_margin(egui::Margin::same(18.0)))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                if let Some(t) = tex.as_ref() {
+                    ui.add(egui::Image::new((t.id(), vec2(72.0, 72.0))));
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new(a.name).size(19.0).strong().color(TEXT));
+                ui.label(RichText::new(format!("Version {}", a.version)).monospace().color(GOOD));
+                ui.add_space(2.0);
+                ui.label(RichText::new(a.tagline).color(DIM));
+            });
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.label(RichText::new("CREATED BY").small().strong().color(ACCENT));
+            egui::Grid::new("about_credits").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+                ui.label(RichText::new("Nikos Batsikas").strong().color(TEXT));
+                ui.label(RichText::new("Author - idea, design, testing").color(DIM));
+                ui.end_row();
+                ui.label(RichText::new("Claude").strong().color(TEXT));
+                ui.label(RichText::new("AI pair programmer by Anthropic").color(DIM));
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("FEATURES").small().strong().color(ACCENT));
+            for line in a.features {
+                ui.label(RichText::new(format!("\u{2022}  {line}")).color(TEXT));
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("PROJECT").small().strong().color(ACCENT));
+            ui.hyperlink_to("github.com/nikosbatsikas/radiomoon-mpx", "https://github.com/nikosbatsikas/radiomoon-mpx");
+            ui.label(RichText::new("Part of RadioMoon - github.com/nikosbatsikas/radiomoon").small().color(DIM));
+            ui.label(RichText::new("Written in Rust - egui / eframe - rodio").small().color(DIM));
+            ui.label(RichText::new("\u{A9} 2026 Nikos Batsikas").small().color(DIM));
+            ui.add_space(10.0);
+            egui::Frame::none().fill(INSET).stroke(Stroke::new(1.0_f32, BORDER)).rounding(5.0).inner_margin(egui::Margin::same(9.0)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Like RadioMoon MPX?").strong().color(TEXT));
+                        ui.label(RichText::new("Send a gift to the author.").small().color(DIM));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn = egui::Button::new(RichText::new("Gift with PayPal").strong().size(12.0).color(Color32::from_rgb(0x00, 0x30, 0x87)))
+                            .fill(Color32::from_rgb(0xFF, 0xC4, 0x39))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x00, 0x70, 0xBA)))
+                            .rounding(12.0)
+                            .min_size(vec2(130.0, 24.0));
+                        if ui.add(btn).on_hover_text("paypal.me/nikosbatsikas").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab("https://paypal.me/nikosbatsikas"));
+                        }
+                    });
+                });
+            });
+            ui.add_space(10.0);
+            ui.vertical_centered(|ui| {
+                if ui.add(egui::Button::new(RichText::new("Close").strong().color(Color32::WHITE)).fill(Color32::from_rgb(0x1f, 0x7f, 0xc4)).min_size(vec2(90.0, 24.0))).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close || !shown {
+        *open = false;
+    }
 }

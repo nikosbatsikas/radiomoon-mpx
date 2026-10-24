@@ -50,6 +50,9 @@ struct App {
     rx: Option<RxHandle>,
     devs: Vec<String>,
     first: bool,
+    about: bool,
+    about_tex: Option<egui::TextureHandle>,
+    logo_tex: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -62,6 +65,18 @@ impl App {
             r.stop();
         }
     }
+    /// Small program icon for the header.
+    fn logo(&mut self, ctx: &egui::Context) -> egui::TextureId {
+        if self.logo_tex.is_none() {
+            if let Ok(img) = image::load_from_memory(look::RECEIVER_ICON) {
+                let img = img.resize(64, 64, image::imageops::FilterType::Lanczos3).to_rgba8();
+                let size = [img.width() as usize, img.height() as usize];
+                self.logo_tex = Some(ctx.load_texture("logo", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR));
+            }
+        }
+        self.logo_tex.as_ref().map(|t| t.id()).unwrap_or_default()
+    }
+
     fn persist(&self) {
         if let Ok(js) = serde_json::to_string_pretty(&self.s) {
             let _ = std::fs::write(cfg_path(), js);
@@ -76,9 +91,13 @@ fn cap(ui: &mut egui::Ui, text: &str) {
 impl App {
     fn header(&mut self, ui: &mut egui::Ui, v: &RxView) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("RadioMoon MPX Receiver").size(19.0).strong());
+            ui.add(egui::Image::new((self.logo(ui.ctx()), egui::vec2(20.0, 20.0))));
+            ui.label(RichText::new("RadioMoon MPX Receiver").size(15.0).strong());
             ui.label(RichText::new(format!("v{VERSION}")).small().color(look::DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("About").clicked() {
+                    self.about = true;
+                }
                 if self.rx.is_none() {
                     if look::primary_button(ui, "▶  Start").clicked() {
                         self.start();
@@ -103,7 +122,7 @@ impl App {
         let Some(r) = &self.rx else { return };
         card(ui, "Link", |ui| {
             ui.horizontal_wrapped(|ui| {
-                tile(ui, "Bandwidth", &look::mbps(v.mbps), "Mbit/s", look::ACCENT, 130.0);
+                tile(ui, "Bandwidth", &look::mbps(v.mbps), "Mbit/s", look::ACCENT, 120.0);
                 let bits = if v.stats.bits == 0 { 24 } else { v.stats.bits };
                 let fmt = if !v.receiving { "-".to_string() } else if v.flac { "FLAC".to_string() } else { format!("L{bits}") };
                 tile(ui, "Format", &fmt, &if v.receiving { format!("{bits}-bit, 192 kHz") } else { String::new() }, look::TEXT, 130.0);
@@ -114,7 +133,7 @@ impl App {
                 tile(ui, "Received", &format!("{:.1}", v.total_mb), "MB", look::TEXT, 100.0);
             });
             ui.add_space(4.0);
-            look::sparkline(ui, &v.hist, 80.0, look::ACCENT);
+            look::sparkline(ui, &v.hist, 52.0, look::ACCENT);
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 look::dot(ui, if v.receiving { look::GOOD } else { look::WARN });
@@ -177,13 +196,31 @@ impl eframe::App for App {
             }
         }
         let v = self.rx.as_ref().map(|r| r.view()).unwrap_or_default();
-        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(16.0, 10.0))).show(ctx, |ui| {
+        egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
             self.header(ui, &v);
         });
-        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(14.0)).show(ctx, |ui| {
+        look::about_window(
+            ctx,
+            &mut self.about,
+            &mut self.about_tex,
+            &look::About {
+                name: "RadioMoon MPX Receiver",
+                tagline: "Receives the MPX over IP and plays it into the exciter",
+                features: &[
+                    "UDP (RTP) or TCP, format detected automatically",
+                    "L16 / L20 / L24 and FLAC lossless 16 / 20 / 24-bit",
+                    "Lost packets hidden without a pilot or RDS phase jump",
+                    "Live bandwidth, buffer and loss readouts with history",
+                    "192 kHz sound card output and signal analyzer",
+                ],
+                png: look::RECEIVER_ICON,
+                version: VERSION,
+            },
+        );
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false;
-                if ui.available_width() >= 860.0 {
+                if ui.available_width() >= 740.0 {
                     ui.columns(2, |cols| {
                         ch |= self.settings_cards(&mut cols[0]);
                         self.link_card(&mut cols[1], &v);
@@ -216,10 +253,10 @@ fn main() -> eframe::Result<()> {
     let devs: Vec<String> = rodio::cpal::default_host().output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 860.0])
-            .with_min_inner_size([520.0, 420.0])
+            .with_inner_size([820.0, 700.0])
+            .with_min_inner_size([460.0, 380.0])
             .with_title("RadioMoon MPX Receiver")
-            .with_icon(std::sync::Arc::new(look::icon())),
+            .with_icon(std::sync::Arc::new(look::icon(look::RECEIVER_ICON))),
         ..Default::default()
     };
     eframe::run_native(
@@ -227,7 +264,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             look::apply_style(&cc.egui_ctx);
-            Ok(Box::new(App { s, rx: None, devs, first: true }))
+            Ok(Box::new(App { s, rx: None, devs, first: true, about: false, about_tex: None, logo_tex: None }))
         }),
     )
 }

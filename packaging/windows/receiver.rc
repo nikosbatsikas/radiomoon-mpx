@@ -1,0 +1,30 @@
+// Windows resources of the RadioMoon MPX Receiver program: icon and version information.
+// VER_MAJOR, VER_MINOR, VER_PATCH and VER_TEXT are set by build.rs from Cargo.toml.
+1 ICON "receiver.ico"
+
+1 VERSIONINFO
+FILEVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
+PRODUCTVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "RadioMoon"
+      VALUE "FileDescription", "RadioMoon MPX Receiver"
+      VALUE "FileVersion", VER_TEXT
+      VALUE "InternalName", "RadioMoon MPX Receiver"
+      VALUE "OriginalFilename", "RadioMoon-MPX-Receiver.exe"
+      VALUE "ProductName", "RadioMoon MPX Receiver"
+      VALUE "ProductVersion", VER_TEXT
+      VALUE "Comments", "FM multiplex receiver (MPX over IP to a 192 kHz sound card)"
+      VALUE "LegalCopyright", "(c) 2026 Nikos Batsikas"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
