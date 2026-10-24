@@ -25,6 +25,17 @@ Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is 
 
 The Transmitter can also send a ready composite signal: Audio source > **MPX input (192 kHz)**. Choose a sound card input that records at 192 kHz and the channel (left or right) that carries the MPX, e.g. from the MPX output of a broadcast processor. PCM and FLAC outputs send the signal as it is (an exact copy). Compact MPX outputs decode it first - stereo audio, pilot and RDS levels, RDS station name, RadioText, PI, PTY and flags - and the receiver rebuilds the composite from that (other RDS services such as clock time or AF lists are not carried). The Signal and RDS settings are not used with an MPX input.
 
+## SFN (single frequency network)
+
+Several transmitters on the same frequency must put the same signal on air at the same moment.
+
+1. **Transmitter**, SFN tab: switch on *Send SFN time stamps* and choose the reference clock. Every UDP packet then carries the UTC time of its first sample.
+2. **Every Receiver**, SFN tab: switch on *Play every sample at its time stamp + delay*, choose the reference clock and set the **same delay** at all sites, longer than the slowest network path (the *Arrival margin* shows how much time is left). Calibrate each site's *Output correction* once (sound card, exciter, cables), e.g. with an oscilloscope against the GPS PPS.
+
+Reference clocks: **System clock** (best: the computer synchronised by PTP - ptp4l + phc2sys on Linux, the PTP client of Windows - or by GPS PPS with gpsd + chrony), the built-in **PTP** client (IEEE 1588v2 default profile, multicast 224.0.1.129, end-to-end delay, ports 319/320; software time stamps, about ±10-100 µs), or a **GPS receiver** on a serial port (NMEA $xxRMC / $xxZDA; with PPS on the DCD line about ±0.1-1 ms, NMEA alone about ±10 ms for tests).
+
+The time stamp is an RTP header extension (profile 0x524D, 8 bytes, ns since 1970 UTC), so it needs UDP; receivers without SFN ignore it. The receiver follows the stamps with a fine resampler, so its sound card clock does not matter. The overall accuracy also depends on how exactly the sound driver reports its output latency; for coverage overlap areas calibrate each site.
+
 ## Putting RadioMoon on air
 
 Enable RadioMoon's internet broadcast (Icecast or Shoutcast) and set the MPX Transmitter's source to **Internet stream** with that URL. RadioMoon sends the title of every song to the server, and the transmitter turns it into the RDS RadioText (*RadioText from the song*). A sound input fed from RadioMoon's output works too, with a fixed RadioText.

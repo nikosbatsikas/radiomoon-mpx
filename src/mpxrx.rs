@@ -3,8 +3,11 @@
 use crate::mpx::push_hist;
 use crate::compact::{CompactRx, CompactTcp, TCP_COMPACT_MAGIC};
 use crate::mpxflac::{Depacketizer, RxStats, TcpDeframer};
-use crate::mpxio::{card_thread, get, set, track_peak, Queue, Text};
+use crate::clock::RefClock;
+use crate::mpxio::{card_thread, get, set, sfn_card_thread, track_peak, Queue, Text};
 use crate::rdsdec::RdsDecoder;
+use crate::clock::{ClockCfg, ClockState};
+use crate::sfn::{SfnCfg, SfnPlayout, SfnStatus};
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{TcpListener, UdpSocket};
@@ -18,6 +21,29 @@ pub struct RxCfg {
     pub port: u16,
     pub device: String,
     pub buffer_ms: u32,
+    /// SFN playout (UDP only): plays every sample at its time stamp + delay by the reference clock.
+    pub sfn: Option<(SfnCfg, ClockCfg)>,
+}
+
+/// Where the received samples go: the normal buffer, or the SFN playout.
+enum Sink {
+    Plain(Arc<Queue>),
+    Sfn(Arc<SfnPlayout>),
+}
+
+impl Sink {
+    fn push(&self, v: &[f32], stamp: Option<(usize, i64)>) {
+        match self {
+            Sink::Plain(q) => q.push(v),
+            Sink::Sfn(p) => p.push(v, stamp),
+        }
+    }
+    fn ms(&self) -> u32 {
+        match self {
+            Sink::Plain(q) => q.ms(),
+            Sink::Sfn(p) => p.ms(),
+        }
+    }
 }
 
 /// Serialisation of the packet statistics (kept free of serde in mpxflac.rs).
@@ -82,6 +108,9 @@ pub struct RxView {
     pub hist: VecDeque<f32>,
     /// RDS decoded from the received MPX.
     pub rds: RdsView,
+    /// SFN playout and its reference clock (when SFN is on).
+    pub sfn: Option<SfnStatus>,
+    pub clock: Option<ClockState>,
 }
 
 pub struct RxHandle {
@@ -108,7 +137,7 @@ impl Meter {
         self.total += wire_bytes;
     }
     /// Returns true when the numbers were published.
-    fn tick(&mut self, view: &Mutex<RxView>, from: &str, st: &RxStats, q: &Queue, card: &Text, rds: &RdsDecoder) -> bool {
+    fn tick(&mut self, view: &Mutex<RxView>, from: &str, st: &RxStats, q: &Sink, card: &Text, rds: &RdsDecoder) -> bool {
         if self.at.elapsed() < Duration::from_millis(500) {
             return false;
         }
@@ -121,6 +150,14 @@ impl Meter {
             v.mbps = mbps;
             v.total_mb = self.total as f64 / 1e6;
             v.buffer_ms = q.ms();
+            if let Sink::Sfn(p) = q {
+                v.sfn = p.status.lock().ok().map(|g| {
+                    let mut st = g.clone();
+                    st.stamp_jitter_us = p.stamp_jitter_us();
+                    st
+                });
+                v.clock = Some(p.clock.state());
+            }
             v.stats = *st;
             v.card = get(card);
             v.rds = RdsView::from(rds, self.bytes > 0);
@@ -199,9 +236,19 @@ impl RxHandle {
         let status: Text = Arc::new(Mutex::new("Starting...".into()));
         let peak = Arc::new(AtomicU32::new(0));
         let view = Arc::new(Mutex::new(RxView::default()));
-        let q = Queue::new(cfg.buffer_ms.clamp(20, 2000));
         let card: Text = Arc::new(Mutex::new(String::new()));
-        card_thread(cfg.device.clone(), q.clone(), stop.clone(), card.clone(), "Sound card");
+        let q = match (&cfg.sfn, cfg.proto == "tcp") {
+            (Some((sc, cc)), false) => {
+                let pl = SfnPlayout::new(sc.clone(), RefClock::start(cc));
+                sfn_card_thread(cfg.device.clone(), pl.clone(), stop.clone(), card.clone(), "Sound card");
+                Sink::Sfn(pl)
+            }
+            _ => {
+                let q = Queue::new(cfg.buffer_ms.clamp(20, 2000));
+                card_thread(cfg.device.clone(), q.clone(), stop.clone(), card.clone(), "Sound card");
+                Sink::Plain(q)
+            }
+        };
         let scope = crate::mpxscope::new_scope();
         let scope2 = scope.clone();
         let (st, stt, pk, vw, port, tcp) = (stop.clone(), status.clone(), peak.clone(), view.clone(), cfg.port, cfg.proto == "tcp");
@@ -249,7 +296,7 @@ impl RxHandle {
                                     track_peak(&samples, &pk);
                                     an.push(&samples, &scope2);
                                     rds.push(&samples);
-                                    q.push(&samples);
+                                    q.push(&samples, None); // TCP carries no SFN time stamps
                                 }
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
@@ -289,8 +336,8 @@ impl RxHandle {
                             if !samples.is_empty() {
                                 track_peak(&samples, &pk);
                                 an.push(&samples, &scope2);
-                                    rds.push(&samples);
-                                q.push(&samples);
+                                rds.push(&samples);
+                                q.push(&samples, if compact { cx.stamp } else { de.stamp });
                             }
                         }
                     }

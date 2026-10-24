@@ -1,7 +1,9 @@
 //! MPX output: runs the generator (mpxdsp) on the on-air audio and sends the composite signal to a
 //! 192 kHz sound card and/or over IP: uncompressed 24-bit (RTP L24 over UDP, raw L24 over TCP) or lossless FLAC
 //! (one FLAC frame per RTP packet, or length-prefixed frames over TCP).
+use crate::clock::{ClockState, RefClock};
 use crate::compact;
+use crate::sfn::{rtp_header_sfn, Timeline};
 use crate::model::{IpTarget, MpxCfg};
 use crate::mpxdsp::{MpxEncoder, MpxParams, RdsData};
 use crate::mpxflac::{encode_frame_bits, pack_pcm, Quantizer, BLOCK, PT_FLAC, PT_L16, PT_L20, PT_L24, TCP_FLAC_MAGIC, TCP_PCM_MAGIC};
@@ -76,7 +78,7 @@ fn set_dscp(sock: socket2::SockRef<'_>, dscp: u8) -> String {
     }
 }
 
-fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link) {
+fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: Option<Arc<Timeline>>) {
     std::thread::spawn(move || {
         let addr = t.address();
         let tcp = t.proto == "tcp";
@@ -187,9 +189,8 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link) {
             let mut idle = true;
             while credit >= pkt as f64 && q.len() >= q.prefill.min(pkt * 4).max(pkt) {
                 samples.clear();
-                if !q.pop_n(pkt, &mut samples) {
-                    break;
-                }
+                let Some(first) = q.pop_n_at(pkt, &mut samples) else { break };
+                let stamp = tl.as_ref().and_then(|t| t.stamp(first));
                 credit -= pkt as f64;
                 idle = false;
                 payload.clear();
@@ -204,14 +205,20 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link) {
                         payload.extend_from_slice(&frame);
                     } else {
                         // one frame per packet (at most about 1170 bytes, below the internet MTU); flags byte 0
-                        rtp_header(&mut payload, PT_FLAC, seq, ts, ssrc);
+                        match stamp {
+                            Some(st) => rtp_header_sfn(&mut payload, PT_FLAC, seq, ts, ssrc, st),
+                            None => rtp_header(&mut payload, PT_FLAC, seq, ts, ssrc),
+                        }
                         payload.push(0);
                         payload.extend_from_slice(&(frame.len() as u16).to_be_bytes());
                         payload.extend_from_slice(&frame);
                     }
                 } else {
                     if !tcp {
-                        rtp_header(&mut payload, pt_pcm, seq, ts, ssrc);
+                        match stamp {
+                            Some(st) => rtp_header_sfn(&mut payload, pt_pcm, seq, ts, ssrc, st),
+                            None => rtp_header(&mut payload, pt_pcm, seq, ts, ssrc),
+                        }
                     }
                     pack_pcm(&ints, bits, &mut payload);
                 }
@@ -273,7 +280,8 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link) {
 
 /// Sends the processed stereo audio of the generator as Compact MPX (FLAC or Opus + levels + RDS), see compact.rs.
 /// `q` holds interleaved stereo at 192 kHz; the RTP timestamps count 192 kHz samples like the other formats.
-fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsData)>>, stop: Arc<AtomicBool>, link: Link) {
+/// `lag`: how many samples the audio in `q` is late against the composite (time stamps are corrected by it).
+fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsData)>>, stop: Arc<AtomicBool>, link: Link, tl: Option<Arc<Timeline>>, lag: u64) {
     std::thread::spawn(move || {
         let addr = t.address();
         let tcp = t.proto == "tcp";
@@ -374,20 +382,25 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
             let mut idle = true;
             while credit >= pkt as f64 && q.len() >= (pkt * 2).max(q.prefill.min(pkt * 8)) {
                 samples.clear();
-                if !q.pop_n(pkt * 2, &mut samples) {
-                    break;
-                }
+                // interleaved stereo: two values per sample
+                let Some(first) = q.pop_n_at(pkt * 2, &mut samples) else { break };
                 credit -= pkt as f64;
                 idle = false;
                 raw += (pkt * 3) as u64 + pkt as u64 * (12 + UDP_IP_HEADERS) / PKT as u64;
                 let (pr, rd) = params.lock().map(|g| (g.0.clone(), g.1.clone())).unwrap_or_default();
+                // packets cover whole blocks of the queue, so the stamp of this block's first sample belongs to the
+                // packet that the encoder finishes with it (Opus: 20 ms = one block per packet)
+                let stamp = tl.as_ref().and_then(|t| t.stamp((first / 2).saturating_sub(lag)));
                 enc.push(&samples, &pr, &rd, &mut packets);
                 for p in packets.drain(..) {
                     payload.clear();
                     if tcp {
                         payload.extend_from_slice(&(p.len() as u16).to_be_bytes());
                     } else {
-                        rtp_header(&mut payload, compact::PT_COMPACT, seq, ts, ssrc);
+                        match stamp {
+                            Some(st) => rtp_header_sfn(&mut payload, compact::PT_COMPACT, seq, ts, ssrc, st),
+                            None => rtp_header(&mut payload, compact::PT_COMPACT, seq, ts, ssrc),
+                        }
                         seq = seq.wrapping_add(1);
                         ts = ts.wrapping_add(pkt as u32);
                     }
@@ -468,6 +481,7 @@ pub struct MpxHandle {
     status: Text,
     card: Text,
     links: Vec<(IpTarget, Link)>,
+    clock: Option<Arc<RefClock>>,
     params: Arc<Mutex<(MpxParams, RdsData)>>,
     live_rt: Mutex<String>,
     pub scope: crate::mpxscope::Scope,
@@ -492,6 +506,9 @@ impl MpxHandle {
         let status: Text = Arc::new(Mutex::new("Starting...".into()));
         let card: Text = Arc::new(Mutex::new(String::new()));
         let mut links: Vec<(IpTarget, Link)> = Vec::new();
+        // SFN: the reference clock and the time line that gives every sample its UTC time
+        let clock = cfg.sfn_on.then(|| RefClock::start(&cfg.clock));
+        let timeline = clock.as_ref().map(|c| Timeline::new(c.clone()));
         let params = Arc::new(Mutex::new((params_of(cfg), rds_of(cfg, ""))));
         let mut queues: Vec<Arc<Queue>> = Vec::new();
         let mut cqueues: Vec<Arc<Queue>> = Vec::new();
@@ -506,11 +523,13 @@ impl MpxHandle {
                 if t.is_compact() {
                     // Compact MPX: gets the processed stereo audio (interleaved, 192 kHz) instead of the composite
                     let q = Queue::new(120);
-                    compact_thread(t.clone(), q.clone(), params.clone(), stop.clone(), link.clone());
+                    // an MPX input reaches the Compact encoder through the stereo decoder, which delays it
+                    let lag = if passthrough { crate::demux::StereoDecoder::DELAY as u64 } else { 0 };
+                    compact_thread(t.clone(), q.clone(), params.clone(), stop.clone(), link.clone(), timeline.clone(), lag);
                     cqueues.push(q);
                 } else {
                     let q = Queue::new(60);
-                    ip_thread(t.clone(), q.clone(), stop.clone(), link.clone());
+                    ip_thread(t.clone(), q.clone(), stop.clone(), link.clone(), timeline.clone());
                     queues.push(q);
                 }
                 links.push((t.clone(), link));
@@ -521,7 +540,7 @@ impl MpxHandle {
         }
         let scope = crate::mpxscope::new_scope();
         let scope2 = scope.clone();
-        let (st, pk, pa, stt) = (stop.clone(), peak.clone(), params.clone(), status.clone());
+        let (st, pk, pa, stt, tl) = (stop.clone(), peak.clone(), params.clone(), status.clone(), timeline.clone());
         let in_rate = 44_100;
         std::thread::spawn(move || {
             let (p0, r0) = pa.lock().map(|g| g.clone()).unwrap_or_default();
@@ -535,6 +554,7 @@ impl MpxHandle {
             let mut out: Vec<f32> = Vec::new();
             let mut an = crate::mpxscope::Analyzer::new();
             let mut secs_at = Instant::now();
+            let (mut produced, mut tl_at): (u64, Instant) = (0, Instant::now());
             // wait for the first audio, then keep going until stopped
             while !st.load(Ordering::Relaxed) {
                 match rx.recv_timeout(Duration::from_millis(250)) {
@@ -542,6 +562,11 @@ impl MpxHandle {
                         out.clear();
                         out.extend(chunk.iter().map(|v| v.clamp(-1.0, 1.0)));
                         an.push(&out, &scope2);
+                        produced += out.len() as u64;
+                        if let Some(t) = &tl {
+                            t.update(produced, tl_at.elapsed().as_secs_f64());
+                            tl_at = Instant::now();
+                        }
                         for q in &queues {
                             q.push(&out);
                         }
@@ -577,6 +602,11 @@ impl MpxHandle {
                         out.clear();
                         enc.process(&chunk, &mut out);
                         an.push(&out, &scope2);
+                        produced += out.len() as u64;
+                        if let Some(t) = &tl {
+                            t.update(produced, tl_at.elapsed().as_secs_f64());
+                            tl_at = Instant::now();
+                        }
                         for q in &queues {
                             q.push(&out);
                         }
@@ -600,7 +630,7 @@ impl MpxHandle {
                 }
             }
         });
-        MpxHandle { stop, peak, status, card, links, params, live_rt: Mutex::new(String::new()), scope }
+        MpxHandle { stop, peak, status, card, links, clock, params, live_rt: Mutex::new(String::new()), scope }
     }
 
     /// Applies changed levels / RDS texts while running.
@@ -640,6 +670,11 @@ impl MpxHandle {
         self.links.iter().map(|(t, l)| (t.clone(), l.lock().map(|g| g.clone()).unwrap_or_default())).collect()
     }
 
+    /// The SFN reference clock (None when SFN is off).
+    pub fn clock_state(&self) -> Option<ClockState> {
+        self.clock.as_ref().map(|c| c.state())
+    }
+
     /// Sum of the bandwidth of all IP outputs, Mbit/s.
     pub fn total_mbps(&self) -> f32 {
         self.links.iter().map(|(_, l)| l.lock().map(|g| g.mbps).unwrap_or(0.0)).sum()
@@ -647,6 +682,9 @@ impl MpxHandle {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(c) = &self.clock {
+            c.stop();
+        }
     }
 }
 

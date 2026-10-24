@@ -2,7 +2,7 @@
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rodio::cpal::{FromSample, SampleFormat, SampleRate, SizedSample, Stream, StreamConfig};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,16 +28,19 @@ pub struct Queue {
     cap: usize,
     pub under: AtomicU32,
     pub drops: AtomicU32,
+    /// Number of values ever pushed (gives every value a fixed number: total - len is the next one popped).
+    total: AtomicU64,
 }
 
 impl Queue {
     pub fn new(prefill_ms: u32) -> Arc<Queue> {
         let prefill = (FS as usize * prefill_ms as usize) / 1000;
-        Arc::new(Queue { q: Mutex::new(VecDeque::with_capacity(prefill * 4)), prefill, cap: prefill * 3 + FS as usize / 5, under: AtomicU32::new(0), drops: AtomicU32::new(0) })
+        Arc::new(Queue { q: Mutex::new(VecDeque::with_capacity(prefill * 4)), prefill, cap: prefill * 3 + FS as usize / 5, under: AtomicU32::new(0), drops: AtomicU32::new(0), total: AtomicU64::new(0) })
     }
     pub fn push(&self, v: &[f32]) {
         if let Ok(mut g) = self.q.lock() {
             g.extend(v.iter().copied());
+            self.total.fetch_add(v.len() as u64, Ordering::Relaxed);
             if g.len() > self.cap {
                 let cut = g.len() - self.prefill;
                 g.drain(..cut);
@@ -51,6 +54,17 @@ impl Queue {
     pub fn ms(&self) -> u32 {
         (self.len() as u64 * 1000 / FS as u64) as u32
     }
+    /// Like `pop_n`, and returns the number of the first value popped (counted from the start of the stream).
+    pub fn pop_n_at(&self, n: usize, out: &mut Vec<f32>) -> Option<u64> {
+        let mut g = self.q.lock().ok()?;
+        if g.len() < n {
+            return None;
+        }
+        let first = self.total.load(Ordering::Relaxed) - g.len() as u64;
+        out.extend(g.drain(..n));
+        Some(first)
+    }
+
     #[allow(dead_code)]
     pub fn pop_n(&self, n: usize, out: &mut Vec<f32>) -> bool {
         if let Ok(mut g) = self.q.lock() {
@@ -172,4 +186,83 @@ pub fn track_peak(s: &[f32], pk: &AtomicU32) {
     let m = s.iter().fold(0.0f32, |a, b| a.max(b.abs()));
     let old = f32::from_bits(pk.load(Ordering::Relaxed));
     pk.store(if m > old { m } else { old * 0.95 }.to_bits(), Ordering::Relaxed);
+}
+
+
+// ---------------------------------------------------------------- SFN: sound card output at the time stamps
+
+fn build_sfn<T: SizedSample + FromSample<f32>>(dev: &rodio::cpal::Device, cfg: &StreamConfig, pl: Arc<crate::sfn::SfnPlayout>) -> Result<Stream, String> {
+    let ch = cfg.channels as usize;
+    let mut mono: Vec<f32> = Vec::new();
+    dev.build_output_stream(
+        cfg,
+        move |data: &mut [T], info: &rodio::cpal::OutputCallbackInfo| {
+            let frames = data.len() / ch;
+            mono.resize(frames, 0.0);
+            // how long until the first sample of this block is heard, as the driver reports it
+            let ts = info.timestamp();
+            let lat = ts.playback.duration_since(&ts.callback).map(|d| d.as_nanos() as i128).unwrap_or(0);
+            pl.render(&mut mono, lat);
+            for (frame, v) in data.chunks_mut(ch).zip(&mono) {
+                for s in frame.iter_mut() {
+                    *s = T::from_sample(*v);
+                }
+            }
+        },
+        |e| eprintln!("MPX output error: {e}"),
+        None,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Like `card_thread`, but every sample is played at its SFN time (see sfn.rs).
+pub fn sfn_card_thread(name: String, pl: Arc<crate::sfn::SfnPlayout>, stop: Arc<AtomicBool>, status: Text, label: &'static str) {
+    std::thread::spawn(move || {
+        let open = || -> Result<Stream, String> {
+            let dev = find_device(&name).ok_or("No sound output found")?;
+            let ranges = dev.supported_output_configs().map_err(|e| e.to_string())?;
+            let mut best: Option<(u32, rodio::cpal::SupportedStreamConfig)> = None;
+            for r in ranges {
+                if r.min_sample_rate().0 <= FS && FS <= r.max_sample_rate().0 {
+                    let fmt_score = match r.sample_format() {
+                        SampleFormat::F32 => 3,
+                        SampleFormat::I32 => 2,
+                        SampleFormat::I16 => 1,
+                        _ => 0,
+                    };
+                    if fmt_score == 0 {
+                        continue;
+                    }
+                    let score = fmt_score + if r.channels() == 2 { 10 } else { 0 };
+                    if best.as_ref().map(|b| score > b.0).unwrap_or(true) {
+                        best = Some((score, r.with_sample_rate(SampleRate(FS))));
+                    }
+                }
+            }
+            let Some((_, sc)) = best else {
+                return Err("This sound device does not support 192 kHz output".into());
+            };
+            let fmt = sc.sample_format();
+            let cfg: StreamConfig = sc.into();
+            let stream = match fmt {
+                SampleFormat::F32 => build_sfn::<f32>(&dev, &cfg, pl.clone())?,
+                SampleFormat::I32 => build_sfn::<i32>(&dev, &cfg, pl.clone())?,
+                _ => build_sfn::<i16>(&dev, &cfg, pl.clone())?,
+            };
+            stream.play().map_err(|e| e.to_string())?;
+            Ok(stream)
+        };
+        let stream = match open() {
+            Ok(s) => s,
+            Err(e) => {
+                set(&status, &format!("{label}: {e}"));
+                return;
+            }
+        };
+        while !stop.load(Ordering::Relaxed) {
+            set(&status, &format!("{label}: 192 kHz, SFN playout, buffer {} ms", pl.ms()));
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        drop(stream);
+    });
 }

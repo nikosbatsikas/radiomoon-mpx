@@ -8,7 +8,9 @@ use radiomoon_mpx::host::Host;
 use radiomoon_mpx::look::{self, card, pill, Tile};
 use radiomoon_mpx::mpxrx::{RxCfg, RxHandle, RxView};
 use radiomoon_mpx::mpxscope::{self, Scope};
+use radiomoon_mpx::clock::ClockCfg;
 use radiomoon_mpx::service;
+use radiomoon_mpx::sfn::SfnCfg;
 use radiomoon_mpx::status::{self, RxStatus};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
@@ -29,11 +31,28 @@ struct Saved {
     autostart: bool,
     close_to_tray: bool,
     fit_window: bool,
+    /// SFN: play every sample at its time stamp + delay (UDP only).
+    sfn_on: bool,
+    sfn_delay_ms: f64,
+    sfn_correction_us: f64,
+    clock: ClockCfg,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { proto: "udp".into(), port: 5004, device: String::new(), buffer_ms: 250, autostart: true, close_to_tray: true, fit_window: true }
+        Saved {
+            proto: "udp".into(),
+            port: 5004,
+            device: String::new(),
+            buffer_ms: 250,
+            autostart: true,
+            close_to_tray: true,
+            fit_window: true,
+            sfn_on: false,
+            sfn_delay_ms: 500.0,
+            sfn_correction_us: 0.0,
+            clock: ClockCfg::default(),
+        }
     }
 }
 
@@ -67,7 +86,17 @@ fn load() -> Saved {
 }
 
 fn rx_cfg(s: &Saved) -> RxCfg {
-    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms }
+    let sfn = (s.sfn_on && s.proto == "udp").then(|| (SfnCfg { delay_ms: s.sfn_delay_ms, correction_us: s.sfn_correction_us }, s.clock.clone()));
+    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Rds,
+    Input,
+    Output,
+    Sfn,
+    Service,
 }
 
 // ---------------------------------------------------------------- service (no window)
@@ -100,6 +129,8 @@ struct App {
     about_tex: Option<egui::TextureHandle>,
     logo_tex: Option<egui::TextureHandle>,
     fit_last: f32,
+    tab: Tab,
+    ports: Vec<String>,
 }
 
 /// What the window shows: from the receiver in this program or from the service's status file.
@@ -204,6 +235,9 @@ impl App {
                 if svc.installed {
                     pill(ui, "SERVICE", look::ACCENT);
                 }
+                if let Some(s) = live.and_then(|l| l.v.sfn.as_ref()) {
+                    pill(ui, if s.locked { "SFN LOCKED" } else { "SFN" }, if s.locked { look::GOOD } else { look::WARN });
+                }
             });
         });
     }
@@ -293,13 +327,13 @@ impl App {
         });
     }
 
-    fn settings_cards(&mut self, ui: &mut egui::Ui, svc_running: bool) -> bool {
+    fn input_card(&mut self, ui: &mut egui::Ui) -> bool {
         let mut ch = false;
-        card(ui, "Input", |ui| {
+        card(ui, "Input (from the transmitter)", |ui| {
             egui::Grid::new("in").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
                 cap(ui, "Protocol");
                 ui.horizontal(|ui| {
-                    ch |= ui.selectable_value(&mut self.s.proto, "udp".to_string(), "UDP").changed();
+                    ch |= ui.selectable_value(&mut self.s.proto, "udp".to_string(), "UDP (RTP)").changed();
                     ch |= ui.selectable_value(&mut self.s.proto, "tcp".to_string(), "TCP").changed();
                 });
                 ui.end_row();
@@ -307,12 +341,17 @@ impl App {
                 ch |= ui.add(egui::DragValue::new(&mut self.s.port).range(1..=65535)).changed();
                 ui.end_row();
             });
-            ui.label(RichText::new("Format detected automatically (L16/L20/L24, FLAC, Compact MPX).").small().color(look::DIM));
+            ui.label(RichText::new("The format is detected automatically: L16 / L20 / L24, FLAC or Compact MPX.").small().color(look::DIM));
         });
-        card(ui, "Output", |ui| {
+        ch
+    }
+
+    fn output_card(&mut self, ui: &mut egui::Ui, svc_running: bool) -> bool {
+        let mut ch = false;
+        card(ui, "Output (exciter MPX input)", |ui| {
             cap(ui, "Sound device (192 kHz)");
             let shown = if self.s.device.is_empty() { "Default".to_string() } else { self.s.device.clone() };
-            let w = (ui.available_width() - 6.0).max(120.0);
+            let w = (ui.available_width() - 6.0).clamp(160.0, 420.0);
             egui::ComboBox::from_id_salt("dev").width(w).selected_text(shown).show_ui(ui, |ui| {
                 ch |= ui.selectable_value(&mut self.s.device, String::new(), "Default").changed();
                 for d in &self.devs {
@@ -321,14 +360,80 @@ impl App {
             });
             ui.horizontal(|ui| {
                 cap(ui, "Buffer");
-                ch |= ui.add(egui::DragValue::new(&mut self.s.buffer_ms).range(20..=2000).suffix(" ms")).changed();
+                ui.add_enabled_ui(!self.s.sfn_on, |ui| {
+                    ch |= ui.add(egui::DragValue::new(&mut self.s.buffer_ms).range(20..=2000).suffix(" ms")).changed();
+                });
+                if self.s.sfn_on {
+                    ui.label(RichText::new("(SFN: the delay of the SFN tab is used)").small().color(look::DIM));
+                }
             });
-            ch |= ui.checkbox(&mut self.s.autostart, "Start with the program").changed();
+            ch |= ui.checkbox(&mut self.s.autostart, "Start receiving when the program starts").changed();
             if self.rx.is_some() || svc_running {
                 let msg = if svc_running { "Changes apply after Service > Restart." } else { "Changes apply after Stop and Start." };
                 ui.label(RichText::new(msg).small().color(look::DIM));
             }
         });
+        ch
+    }
+
+    /// SFN: playout at the time stamps by the reference clock.
+    fn sfn_card(&mut self, ui: &mut egui::Ui, live: Option<&Live>, svc_running: bool) -> bool {
+        let mut ch = false;
+        let st = live.and_then(|l| l.v.sfn.clone());
+        let clock = live.and_then(|l| l.v.clock.clone());
+        card(ui, "SFN (single frequency network)", |ui| {
+            ch |= ui.checkbox(&mut self.s.sfn_on, "Play every sample at its time stamp + delay").changed();
+            ui.label(
+                RichText::new("For several transmitters on the same frequency: every site plays the same sample at the same moment, by a common reference clock (GPS or PTP). The Transmitter must send SFN time stamps (its SFN tab), over UDP.")
+                    .small()
+                    .color(look::DIM),
+            );
+            if self.s.proto != "udp" && self.s.sfn_on {
+                ui.label(RichText::new("SFN needs UDP: TCP carries no time stamps (Input tab).").color(look::WARN));
+            }
+            if self.s.sfn_on {
+                egui::Grid::new("sfn").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                    cap(ui, "Delay (all sites)");
+                    ch |= ui
+                        .add(egui::DragValue::new(&mut self.s.sfn_delay_ms).range(50.0..=5000.0).speed(5.0).suffix(" ms"))
+                        .on_hover_text("From the time stamp to the moment on air. The same value at every site; longer than the slowest network path to any site (see Arrival margin).")
+                        .changed();
+                    ui.end_row();
+                    cap(ui, "Output correction");
+                    ch |= ui
+                        .add(egui::DragValue::new(&mut self.s.sfn_correction_us).range(-100_000.0..=100_000.0).speed(1.0).suffix(" µs"))
+                        .on_hover_text("This site's own delay of sound card, exciter and cables, measured against the reference (e.g. with an oscilloscope and the PPS): positive values play earlier.")
+                        .changed();
+                    ui.end_row();
+                });
+            }
+            if let Some(s) = &st {
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    look::dot(ui, if s.locked { look::GOOD } else { look::WARN });
+                    ui.label(RichText::new(&s.state).strong());
+                });
+                look::tiles(
+                    ui,
+                    &[
+                        Tile::new("Timing error", format!("{:+.1}", s.error_us), "µs", if s.locked { look::GOOD } else { look::WARN }),
+                        Tile::new("Rate trim", format!("{:+.2}", s.ppm), "ppm", look::TEXT),
+                        Tile::new("Arrival margin", if s.margin_ms.is_finite() && s.margin_ms < 1e6 { format!("{:.0}", s.margin_ms) } else { "-".into() }, "ms", if s.margin_ms < 20.0 { look::WARN } else { look::TEXT }),
+                        Tile::new("Stamp jitter", format!("±{:.1}", s.stamp_jitter_us), "µs", look::TEXT),
+                        Tile::new("Restarts", s.resyncs.to_string(), "", look::TEXT),
+                    ],
+                );
+            }
+        });
+        if self.s.sfn_on {
+            ch |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.clock, clock.as_ref(), &self.ports);
+            if ui.small_button("Refresh the list of serial ports").clicked() {
+                self.ports = radiomoon_mpx::clock::serial_ports();
+            }
+        }
+        if ch && (self.rx.is_some() || svc_running) {
+            ui.label(RichText::new(if svc_running { "SFN changes apply after Service > Restart." } else { "SFN changes apply after Stop and Start." }).small().color(look::WARN));
+        }
         ch
     }
 }
@@ -374,6 +479,7 @@ impl eframe::App for App {
                     "L16 / L20 / L24, FLAC 16 / 20 / 24-bit and Compact MPX (FLAC / Opus)",
                     "Lost packets hidden without a pilot or RDS phase jump",
                     "RDS display: station name, RadioText, PI, PTY, TP / TA",
+                    "SFN playout with GPS or PTP (IEEE 1588v2) time",
                     "Runs as a Windows / Linux service, system tray icon",
                 ],
                 png: look::RECEIVER_ICON,
@@ -383,36 +489,32 @@ impl eframe::App for App {
         let content_h = egui::CentralPanel::default().frame(egui::Frame::none().fill(look::PANEL).inner_margin(10.0)).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false;
-                // settings 1/3, link 2/3 of the width (one column on narrow windows)
-                let total = ui.available_width();
-                if total >= 640.0 {
-                    let gap = 8.0;
-                    let left = ((total - gap) / 3.0).floor();
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
-                        ui.vertical(|ui| {
-                            ui.set_width(left);
-                            ch |= self.settings_cards(ui, svc.running);
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_width(total - gap - left);
-                            self.link_card(ui, live.as_ref());
-                            self.rds_card(ui, live.as_ref());
-                        });
-                    });
-                } else {
-                    self.link_card(ui, live.as_ref());
-                    self.rds_card(ui, live.as_ref());
-                    ch |= self.settings_cards(ui, svc.running);
-                }
-                let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
-                egui::CollapsingHeader::new(RichText::new("Service, tray & window").strong().color(look::ACCENT)).default_open(svc.installed).show(ui, |ui| {
-                    if self.host.settings_ui(ui, &mut c2t, &mut fit) {
-                        ch = true;
+                // the link on top, the settings in tabs below
+                self.link_card(ui, live.as_ref());
+                ui.horizontal_wrapped(|ui| {
+                    for (t, name) in [(Tab::Rds, "RDS"), (Tab::Input, "Input"), (Tab::Output, "Output"), (Tab::Sfn, "SFN"), (Tab::Service, "Service, tray & window")] {
+                        let on = self.tab == t;
+                        let txt = RichText::new(name).strong().color(if on { look::ACCENT } else { look::TEXT });
+                        if ui.add(egui::Button::new(txt).fill(if on { look::CARD } else { look::PANEL }).stroke(egui::Stroke::new(1.0_f32, if on { look::ACCENT } else { look::BORDER }))).clicked() {
+                            self.tab = t;
+                        }
                     }
                 });
-                self.s.close_to_tray = c2t;
-                self.s.fit_window = fit;
+                ui.add_space(4.0);
+                match self.tab {
+                    Tab::Rds => self.rds_card(ui, live.as_ref()),
+                    Tab::Input => ch |= self.input_card(ui),
+                    Tab::Output => ch |= self.output_card(ui, svc.running),
+                    Tab::Sfn => ch |= self.sfn_card(ui, live.as_ref(), svc.running),
+                    Tab::Service => {
+                        let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
+                        if self.host.settings_ui(ui, &mut c2t, &mut fit) {
+                            self.s.close_to_tray = c2t;
+                            self.s.fit_window = fit;
+                            ch = true;
+                        }
+                    }
+                }
                 if let Some(l) = &live {
                     card(ui, "Signal analysis", |ui| {
                         look::deviation_bar(ui, l.peak);
@@ -474,6 +576,8 @@ fn main() -> eframe::Result<()> {
                 about_tex: None,
                 logo_tex: None,
                 fit_last: 0.0,
+                tab: Tab::Rds,
+                ports: radiomoon_mpx::clock::serial_ports(),
             }))
         }),
     )

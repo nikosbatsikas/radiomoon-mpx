@@ -175,3 +175,77 @@ impl Host {
         ch
     }
 }
+
+// ---------------------------------------------------------------- SFN reference clock settings (both programs)
+
+/// Settings of the SFN reference clock, with its live state. Returns true when something was changed.
+pub fn clock_ui(ui: &mut egui::Ui, c: &mut crate::clock::ClockCfg, state: Option<&crate::clock::ClockState>, ports: &[String]) -> bool {
+    let mut ch = false;
+    card(ui, "Reference clock", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ch |= ui.selectable_value(&mut c.source, "system".to_string(), "System clock").changed();
+            ch |= ui.selectable_value(&mut c.source, "ptp".to_string(), "PTP (IEEE 1588v2)").changed();
+            ch |= ui.selectable_value(&mut c.source, "gps".to_string(), "GPS receiver").changed();
+        });
+        let dim = |ui: &mut egui::Ui, t: &str| {
+            ui.label(RichText::new(t).small().color(look::DIM));
+        };
+        match c.source.as_str() {
+            "ptp" => {
+                egui::Grid::new("ptp").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                    ui.label(RichText::new("Domain").color(look::DIM));
+                    ch |= ui.add(egui::DragValue::new(&mut c.ptp_domain).range(0..=127)).changed();
+                    ui.end_row();
+                    ui.label(RichText::new("Interface address").color(look::DIM));
+                    ch |= ui.add(egui::TextEdit::singleline(&mut c.ptp_iface).hint_text("default").desired_width(130.0)).changed();
+                    ui.end_row();
+                });
+                dim(ui, "Built-in PTP client: default profile, multicast 224.0.1.129, end-to-end delay, UDP ports 319 / 320. Software time stamps: about ±10-100 µs, depending on the network and the computer. On Linux the ports need root or CAP_NET_BIND_SERVICE; if ptp4l already runs on this computer, choose \"System clock\" instead (more precise).");
+            }
+            "gps" => {
+                egui::Grid::new("gps").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                    ui.label(RichText::new("Serial port").color(look::DIM));
+                    let shown = if c.gps_port.is_empty() { "Choose ...".to_string() } else { c.gps_port.clone() };
+                    egui::ComboBox::from_id_salt("gpsport").width(150.0).selected_text(shown).show_ui(ui, |ui| {
+                        for p in ports {
+                            ch |= ui.selectable_value(&mut c.gps_port, p.clone(), p).changed();
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(RichText::new("Port name").color(look::DIM));
+                    ch |= ui.add(egui::TextEdit::singleline(&mut c.gps_port).hint_text("COM3 or /dev/ttyACM0").desired_width(150.0)).changed();
+                    ui.end_row();
+                    ui.label(RichText::new("Baud rate").color(look::DIM));
+                    egui::ComboBox::from_id_salt("gpsbaud").width(90.0).selected_text(c.gps_baud.to_string()).show_ui(ui, |ui| {
+                        for b in [4800u32, 9600, 19200, 38400, 57600, 115200] {
+                            ch |= ui.selectable_value(&mut c.gps_baud, b, b.to_string()).changed();
+                        }
+                    });
+                    ui.end_row();
+                });
+                ch |= ui.checkbox(&mut c.gps_pps, "PPS (1 pulse per second) on the DCD line of the port").changed();
+                if !c.gps_pps {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("NMEA delay").color(look::DIM));
+                        ch |= ui.add(egui::DragValue::new(&mut c.gps_delay_ms).range(0.0..=900.0).speed(1.0).suffix(" ms")).on_hover_text("How long after the start of each second the receiver sends its sentences (see its data sheet)").changed();
+                    });
+                }
+                dim(ui, "NMEA only: about ±10 ms, for tests. With PPS on DCD: about ±0.1-1 ms. For real SFN coverage overlap (a few µs) synchronise the system clock to the GPS PPS with gpsd + chrony (Linux) and choose \"System clock\".");
+            }
+            _ => {
+                dim(ui, "The computer's own clock. Use this when the clock is synchronised by PTP (ptp4l + phc2sys on Linux, the PTP client of Windows) or by GPS with PPS (gpsd + chrony): that is the most precise choice. NTP alone (a few ms) is enough only for tests.");
+            }
+        }
+        if let Some(s) = state {
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                look::dot(ui, if s.synced { look::GOOD } else { look::WARN });
+                ui.label(&s.text);
+            });
+            if s.synced && c.source != "system" {
+                ui.label(RichText::new(format!("Offset to the system clock {:+.1} µs, spread ±{:.1} µs", s.offset_us, s.jitter_us)).small().color(look::DIM));
+            }
+        }
+    });
+    ch
+}
