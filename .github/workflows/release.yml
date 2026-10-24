@@ -90,15 +90,16 @@ jobs:
       - name: App bundles and dmg
         run: |
           V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          mkdir -p dist/dmg RadioMoon.iconset
-          for s in 16 32 64 128 256; do sips -z $s $s packaging/icon.png --out RadioMoon.iconset/icon_${s}x${s}.png; done
-          iconutil -c icns RadioMoon.iconset -o RadioMoon.icns
+          mkdir -p dist/dmg
           for P in "Transmitter:radiomoon-mpx-transmitter" "Receiver:radiomoon-mpx-receiver"; do
             NAME="RadioMoon MPX ${P%%:*}"; BIN="${P##*:}"; EXE="RadioMoon-MPX-${P%%:*}"
+            LOW=$(echo ${P%%:*} | tr A-Z a-z)
+            rm -rf icon.iconset && mkdir icon.iconset
+            for s in 16 32 64 128 256; do sips -z $s $s packaging/$LOW.png --out icon.iconset/icon_${s}x${s}.png; done
             APP="dist/dmg/$NAME.app"
             mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
             cp target/release/$BIN "$APP/Contents/MacOS/$EXE"
-            cp RadioMoon.icns "$APP/Contents/Resources/RadioMoon.icns"
+            iconutil -c icns icon.iconset -o "$APP/Contents/Resources/RadioMoon.icns"
             sed -e "s/@VERSION@/$V/g" -e "s/@NAME@/$NAME/g" -e "s/@EXE@/$EXE/g" -e "s/@ID@/com.radiomoon.mpx.$(echo ${P%%:*} | tr A-Z a-z)/g" packaging/macos/Info.plist.in > "$APP/Contents/Info.plist"
           done
           hdiutil create -volname "RadioMoon MPX" -srcfolder dist/dmg -ov -format UDZO dist/RadioMoon-MPX-$V-macos-arm64.dmg

@@ -137,7 +137,7 @@ impl Analyzer {
 pub fn draw(ui: &mut egui::Ui, scope: &Scope) {
     let d = scope.lock().map(|g| g.clone()).unwrap_or_default();
     let kz = |v: f32| format!("{:.1} kHz ({:.1}%)", v * 75.0, v * 100.0);
-    egui::Grid::new("mpx_levels").num_columns(4).spacing([18.0, 4.0]).show(ui, |ui| {
+    egui::Grid::new("mpx_levels").num_columns(4).spacing([14.0, 2.0]).show(ui, |ui| {
         ui.label("Pilot 19 kHz");
         ui.label(egui::RichText::new(kz(d.pilot)).color(Color32::from_rgb(120, 220, 140)));
         ui.label("RDS 57 kHz");
@@ -165,7 +165,7 @@ pub fn draw(ui: &mut egui::Ui, scope: &Scope) {
     ui.add_space(4.0);
     let w = ui.available_width().max(200.0);
     // ---- spectrum
-    let (resp, p) = ui.allocate_painter(Vec2::new(w, 150.0), Sense::hover());
+    let (resp, p) = ui.allocate_painter(Vec2::new(w, 110.0), Sense::hover());
     let r = resp.rect;
     p.rect_filled(r, 2.0, Color32::from_rgb(8, 10, 14));
     let (lo, hi) = (-80.0f32, 0.0f32);
@@ -187,7 +187,7 @@ pub fn draw(ui: &mut egui::Ui, scope: &Scope) {
     }
     ui.add_space(4.0);
     // ---- oscilloscope (waveform of the composite, +-125% = +-93.75 kHz)
-    let (resp, p) = ui.allocate_painter(Vec2::new(w, 110.0), Sense::hover());
+    let (resp, p) = ui.allocate_painter(Vec2::new(w, 80.0), Sense::hover());
     let r: Rect = resp.rect;
     p.rect_filled(r, 2.0, Color32::from_rgb(8, 10, 14));
     let y_of = |v: f32| r.center().y - v.clamp(-1.25, 1.25) / 1.25 * (r.height() / 2.0);
