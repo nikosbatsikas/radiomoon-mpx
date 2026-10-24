@@ -356,7 +356,7 @@ impl App {
                         restart |= ui.selectable_value(&mut self.s.mpx_channel, 1, "Right").changed();
                     });
                     ui.label(
-                        RichText::new("A ready FM composite signal (e.g. the MPX output of a processor or stereo encoder) from a sound card input that records at 192 kHz. It is sent as it is: the Signal and RDS settings are not used, and the IP outputs need a composite format (PCM or FLAC, not Compact).")
+                        RichText::new("A ready FM composite signal (e.g. the MPX output of a processor or stereo encoder) from a sound card input that records at 192 kHz. PCM and FLAC outputs send it as it is. Compact MPX outputs decode it (stereo audio, pilot and RDS levels, RDS station name and RadioText) and the receiver rebuilds it. The Signal and RDS settings are not used.")
                             .small()
                             .color(look::DIM),
                     );

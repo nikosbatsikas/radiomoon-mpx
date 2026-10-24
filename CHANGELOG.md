@@ -2,6 +2,9 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.7.0
+- **MPX input to Compact MPX:** with an MPX input as the source, Compact MPX outputs now work too. The Transmitter decodes the composite (stereo audio with a pilot PLL and the 38 kHz demodulator, the measured pilot and RDS levels, and the RDS station name, RadioText, PI, PTY and flags) and sends that as Compact MPX; the receiver rebuilds the composite with the same levels and RDS. Tested: audio, pilot and stereo levels match the input within 0.1 dB, RDS level measured exactly (2 / 4 / 6 %), more than 30 dB stereo separation. Other RDS services of the input (clock, AF lists ...) are not carried; use PCM or FLAC for an exact copy of the input.
+
 ## 1.6.0
 - **MPX input (Transmitter):** a new audio source, "MPX input (192 kHz)": a ready FM composite signal (e.g. the MPX output of a processor or stereo encoder) is recorded from a sound card input at 192 kHz (left or right channel, with a level control) and sent as it is to the IP receivers (PCM L16/L20/L24 or FLAC) and the 192 kHz sound card output. The analyzer and deviation meter show it; the Receiver also decodes its RDS. Compact MPX is not possible with an MPX input (it carries audio, not a composite); such an output says so.
 - **Fix:** the value tiles (Bandwidth, Format, Buffer ... in the Receiver; Deviation, IP bandwidth ... in the Transmitter) could make the window content wider than the window, which cut off the right side. The tiles now always fit and wrap into more rows on a narrow window.
