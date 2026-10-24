@@ -73,6 +73,12 @@ fn rds_block(d: &RdsData) -> Vec<u8> {
         v.push(n as u8);
         v.extend_from_slice(&b[..n]);
     }
+    // extension (version 1.9): AF list and clock time; older receivers stop reading before it
+    v.push(0xA1);
+    v.push(d.af.len().min(25) as u8);
+    v.extend(d.af.iter().take(25));
+    v.push(d.ct as u8);
+    v.push(d.ct_offset as u8);
     v
 }
 
@@ -91,7 +97,14 @@ fn parse_rds(b: &[u8]) -> Option<RdsData> {
     };
     let ps = text()?;
     let rt = text()?;
-    Some(RdsData { enabled: fl & 8 != 0, pi, ps, rt, pty, tp: fl & 1 != 0, ta: fl & 2 != 0, music: fl & 4 != 0 })
+    let mut d = RdsData { enabled: fl & 8 != 0, pi, ps, rt, pty, tp: fl & 1 != 0, ta: fl & 2 != 0, music: fl & 4 != 0, ..RdsData::default() };
+    if b.get(at) == Some(&0xA1) {
+        let n = *b.get(at + 1)? as usize;
+        d.af = b.get(at + 2..at + 2 + n)?.to_vec();
+        d.ct = *b.get(at + 2 + n)? != 0;
+        d.ct_offset = *b.get(at + 3 + n)? as i8;
+    }
+    Some(d)
 }
 
 // ================================================================ transmitter side
@@ -216,7 +229,7 @@ impl Default for Decoder {
 
 impl Decoder {
     pub fn new() -> Decoder {
-        let rds = RdsData { enabled: false, ..RdsData::default() };
+        let rds = RdsData { enabled: false, ps: String::new(), rt: String::new(), ..RdsData::default() };
         Decoder {
             opus: None,
             // 48 -> 192 kHz: flat to 16 kHz, images (from 32 kHz up) suppressed by the Blackman window
@@ -527,9 +540,10 @@ mod tests {
 
     #[test]
     fn rds_block_roundtrip() {
-        let d = RdsData { enabled: true, pi: 0xA1B2, ps: "MOON FM".into(), rt: "Νίκος - Τραγούδι".into(), pty: 10, tp: true, ta: false, music: true };
+        let d = RdsData { enabled: true, pi: 0xA1B2, ps: "MOON FM".into(), rt: "Νίκος - Τραγούδι".into(), pty: 10, tp: true, ta: false, music: true, af: vec![68, 140], ct: true, ct_offset: -10 };
         let e = parse_rds(&rds_block(&d)).unwrap();
-        assert_eq!((e.pi, e.ps, e.rt, e.pty, e.tp, e.ta, e.music, e.enabled), (d.pi, d.ps, d.rt, d.pty, d.tp, d.ta, d.music, d.enabled));
+        assert_eq!((e.pi, &e.ps, &e.rt, e.pty, e.tp, e.ta, e.music, e.enabled), (d.pi, &d.ps, &d.rt, d.pty, d.tp, d.ta, d.music, d.enabled));
+        assert_eq!((e.af, e.ct, e.ct_offset), (d.af, d.ct, d.ct_offset));
     }
 
     #[test]

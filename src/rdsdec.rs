@@ -43,6 +43,12 @@ pub struct RdsInfo {
     /// Share of correct blocks recently, 0..1.
     pub quality: f32,
     pub groups: u64,
+    /// Alternative frequencies (MHz), in the order received.
+    pub af: Vec<f32>,
+    /// Clock time (group 4A): local date and time as sent, e.g. "25.10.2026 02:31 (UTC+3)".
+    pub ct: String,
+    /// Local time offset of the clock time, half hours.
+    pub ct_offset: Option<i8>,
 }
 
 /// Decimating low-pass (windowed sinc, Blackman), computes only every `m`-th output.
@@ -331,12 +337,37 @@ impl RdsDecoder {
             0 => {
                 self.info.ta = (b >> 4) & 1 == 1;
                 self.info.music = (b >> 3) & 1 == 1;
+                if let (false, Some(c)) = (version_b, c) {
+                    // AF method A: two codes per group; 224 + n announces the count
+                    for code in [(c >> 8) as u8, c as u8] {
+                        if (1..=204).contains(&code) {
+                            let f = 87.5 + code as f32 / 10.0;
+                            if !self.info.af.iter().any(|x| (x - f).abs() < 0.05) && self.info.af.len() < 25 {
+                                self.info.af.push(f);
+                            }
+                        } else if code == 224 {
+                            self.info.af.clear(); // "no AF"
+                        }
+                    }
+                }
                 if let Some(d) = d {
+                    // the name is shown only when its four segments came complete and in order (0, 1, 2, 3):
+                    // a changing PS (pages) then never shows a mix of two pages
                     let seg = (b & 3) as usize;
-                    self.ps[seg * 2] = (d >> 8) as u8;
-                    self.ps[seg * 2 + 1] = d as u8;
-                    self.ps_seen |= 1 << seg;
-                    self.info.ps = self.ps.iter().map(|&c| rds_char(c)).collect();
+                    if seg == 0 {
+                        self.ps_seen = 0;
+                    }
+                    if seg == 0 || self.ps_seen == (1 << seg) - 1 {
+                        self.ps[seg * 2] = (d >> 8) as u8;
+                        self.ps[seg * 2 + 1] = d as u8;
+                        self.ps_seen |= 1 << seg;
+                    } else {
+                        self.ps_seen = 0;
+                    }
+                    if self.ps_seen == 0b1111 {
+                        self.info.ps = self.ps.iter().map(|&c| rds_char(c)).collect();
+                        self.ps_seen = 0;
+                    }
                 }
             }
             2 => {
@@ -367,9 +398,40 @@ impl RdsDecoder {
                 let end = self.rt.iter().position(|&c| c == 0x0D).unwrap_or(64);
                 self.info.rt = self.rt[..end].iter().map(|&c| rds_char(c)).collect::<String>().trim_end().to_string();
             }
+            4 if !version_b => {
+                // clock time: MJD, UTC hour and minute, local offset in half hours
+                if let (Some(c), Some(d)) = (c, d) {
+                    let mjd = ((b as u32 & 3) << 15) | (c as u32 >> 1);
+                    let hour = ((c as u32 & 1) << 4) | (d as u32 >> 12);
+                    let min = (d as u32 >> 6) & 63;
+                    let off = (d as i32 & 31) * if d & 0x20 != 0 { -1 } else { 1 };
+                    if hour < 24 && min < 60 && mjd > 50_000 {
+                        let local = (mjd as i64 - 40_587) * 86_400 + hour as i64 * 3600 + min as i64 * 60 + off as i64 * 1800;
+                        let (days, rem) = (local.div_euclid(86_400), local.rem_euclid(86_400));
+                        let (y, m, dd) = civil(days);
+                        let tz = if off % 2 == 0 { format!("{:+}", off / 2) } else { format!("{:+.1}", off as f32 / 2.0) };
+                        self.info.ct_offset = Some(off as i8);
+                        self.info.ct = format!("{dd:02}.{m:02}.{y} {:02}:{:02} (UTC{tz})", rem / 3600, rem % 3600 / 60);
+                    }
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// Days since 1970-01-01 to (year, month, day).
+fn civil(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// RDS character set: ASCII is identical; the rest is shown as a dot.
@@ -397,7 +459,7 @@ mod tests {
 
     fn run(stereo: bool, rds_level: f32, noise: f32, seconds: usize) -> RdsInfo {
         let params = MpxParams { stereo, rds_level, ..MpxParams::default() };
-        let rds = RdsData { enabled: true, pi: 0x2C1D, ps: "MOON FM".into(), rt: "Artist - Title of the song".into(), pty: 10, tp: true, ta: false, music: true };
+        let rds = RdsData { enabled: true, pi: 0x2C1D, ps: "MOON FM".into(), rt: "Artist - Title of the song".into(), pty: 10, tp: true, ta: false, music: true, ..RdsData::default() };
         let mut gen = MpxEncoder::new(44_100, 192_000, params, rds);
         let mut dec = RdsDecoder::new(192_000);
         let mut seed = 5u32;
@@ -433,6 +495,38 @@ mod tests {
         assert_eq!(i.rt, "Artist - Title of the song");
         assert_eq!((i.pty, i.tp, i.ta, i.music), (Some(10), true, false, true));
         assert!(i.quality > 0.9);
+    }
+
+    #[test]
+    fn decodes_af_ct_and_long_ps() {
+        use crate::mpxdsp::{parse_af, PsPager};
+        let params = MpxParams::default();
+        let rds = RdsData { af: parse_af("94.3, 101.5 105.0"), ct: true, ct_offset: 6, ..RdsData::default() };
+        let mut gen = MpxEncoder::new(44_100, 192_000, params, rds);
+        let mut dec = RdsDecoder::new(192_000);
+        let mut out = Vec::new();
+        let pages = PsPager::pages("RADIO MOON FM ATHENS", "pages");
+        assert_eq!(pages, vec![" RADIO  ".to_string(), "MOON FM ".to_string(), " ATHENS ".to_string()]);
+        let mut seen = std::collections::HashSet::new();
+        for blk in 0..1200 {
+            // a new page every 2 s
+            let page = pages[(blk / 200) % pages.len()].clone();
+            gen.set_rds(RdsData { ps: page, ..gen.comp.rds.data.clone() });
+            let inp: Vec<f32> = (0..441).flat_map(|i| [0.3 * (6.283 * 440.0 * (blk * 441 + i) as f32 / 44_100.0).sin(); 2]).collect();
+            out.clear();
+            gen.process(&inp, &mut out);
+            dec.push(&out);
+            seen.insert(dec.info.ps.clone());
+        }
+        let i = &dec.info;
+        eprintln!("{i:?} pages seen {seen:?}");
+        assert_eq!(i.af, vec![94.3, 101.5, 105.0]);
+        assert!(i.ct.contains("(UTC+3)"), "{}", i.ct);
+        for p in &pages {
+            assert!(seen.contains(p), "page {p:?} never shown complete");
+        }
+        // never a mix of two pages
+        assert!(seen.iter().all(|s| s.trim().is_empty() || pages.contains(s)), "{seen:?}");
     }
 
     #[test]

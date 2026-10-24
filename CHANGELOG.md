@@ -2,6 +2,15 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.9.0
+- **RDS (Transmitter), new settings in the RDS tab:**
+  - **Long station name (PS):** a longer text is shown 8 characters at a time - *in pages* (whole words, centred) or *scrolling* - with the time per page in seconds, and a preview of the pages. A complete name is always sent before the next page, so radios never show a mix; Compact MPX and SFN sites show the same page.
+  - **Alternative frequencies (AF):** a list of up to 25 frequencies (87.6 - 107.9 MHz, method A) in group 0A, so radios can switch to the strongest transmitter of the programme.
+  - **Clock time (CT):** group 4A once a minute with the date, time and the local time offset; radios set their clocks.
+  - The programme type shows its name next to the number.
+- **RDS (Receiver):** the RDS panel also shows the AF list and the clock time; the station name is shown only when it came complete, so pages never appear mixed.
+- Compact MPX carries the AF list and the clock time setting too (older receivers ignore them).
+
 ## 1.8.0
 - **SFN (single frequency network)** with GPS or PTP (IEEE 1588v2) time, in a new SFN tab of both programs:
   - **Transmitter:** "Send SFN time stamps": every UDP packet carries the UTC time of its first sample (RTP header extension; receivers without SFN ignore it). Works with every source, also the MPX input from a sound card (the input card's own clock is followed), and with every format (PCM, FLAC, Compact MPX; the codec delays of Compact MPX are compensated).

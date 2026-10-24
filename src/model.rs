@@ -34,7 +34,17 @@ pub struct MpxCfg {
     pub clock: crate::clock::ClockCfg,
     pub rds_on: bool,
     pub pi: String,
+    /// Station name: up to 8 characters, or a longer text shown in pages (see ps_mode).
     pub ps: String,
+    /// "static" | "pages" (words, 8 characters a page) | "scroll"
+    pub ps_mode: String,
+    /// Seconds per page (or per character when scrolling).
+    pub ps_interval: f32,
+    /// Alternative frequencies in MHz, e.g. "94.3, 101.5".
+    pub af: String,
+    /// Clock time (CT) once a minute, with the local offset in hours.
+    pub ct_on: bool,
+    pub ct_offset_h: f32,
     pub rt: String,
     pub rt_from_playlist: bool,
     pub pty: u8,
@@ -65,6 +75,11 @@ impl Default for MpxCfg {
             sfn_on: false,
             clock: crate::clock::ClockCfg::default(),
             rds_on: true,
+            ps_mode: "static".into(),
+            ps_interval: 3.0,
+            af: String::new(),
+            ct_on: false,
+            ct_offset_h: 2.0,
             pi: "1234".into(),
             ps: "RADIOMON".into(),
             rt: "RadioMoon".into(),

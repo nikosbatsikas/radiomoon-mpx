@@ -466,12 +466,16 @@ pub fn rds_of(c: &MpxCfg, rt: &str) -> RdsData {
     RdsData {
         enabled: c.rds_on,
         pi: u16::from_str_radix(c.pi.trim().trim_start_matches("0x"), 16).unwrap_or(0x1234),
-        ps: c.ps.clone(),
+        // the generator replaces this with the current page of a long PS text (PsPager)
+        ps: crate::mpxdsp::PsPager::pages(&c.ps, &c.ps_mode)[0].clone(),
         rt: if rt.is_empty() { c.rt.clone() } else { rt.to_string() },
         pty: c.pty,
         tp: c.tp,
         ta: c.ta,
         music: c.music,
+        af: crate::mpxdsp::parse_af(&c.af),
+        ct: c.ct_on,
+        ct_offset: (c.ct_offset_h * 2.0).round().clamp(-31.0, 31.0) as i8,
     }
 }
 
@@ -482,6 +486,8 @@ pub struct MpxHandle {
     card: Text,
     links: Vec<(IpTarget, Link)>,
     clock: Option<Arc<RefClock>>,
+    /// Long PS text, mode and seconds per page (the generator picks the page).
+    ps_cfg: Arc<Mutex<(String, String, f32)>>,
     params: Arc<Mutex<(MpxParams, RdsData)>>,
     live_rt: Mutex<String>,
     pub scope: crate::mpxscope::Scope,
@@ -541,6 +547,8 @@ impl MpxHandle {
         let scope = crate::mpxscope::new_scope();
         let scope2 = scope.clone();
         let (st, pk, pa, stt, tl) = (stop.clone(), peak.clone(), params.clone(), status.clone(), timeline.clone());
+        let ps_cfg = Arc::new(Mutex::new((cfg.ps.clone(), cfg.ps_mode.clone(), cfg.ps_interval)));
+        let ps_cfg2 = ps_cfg.clone();
         let in_rate = 44_100;
         std::thread::spawn(move || {
             let (p0, r0) = pa.lock().map(|g| g.clone()).unwrap_or_default();
@@ -555,6 +563,8 @@ impl MpxHandle {
             let mut an = crate::mpxscope::Analyzer::new();
             let mut secs_at = Instant::now();
             let (mut produced, mut tl_at): (u64, Instant) = (0, Instant::now());
+            let pager = crate::mpxdsp::PsPager::default();
+            let ps_cfg = ps_cfg2;
             // wait for the first audio, then keep going until stopped
             while !st.load(Ordering::Relaxed) {
                 match rx.recv_timeout(Duration::from_millis(250)) {
@@ -581,7 +591,19 @@ impl MpxHandle {
                             // composite's scale (audio level 1), pilot and RDS at their measured levels
                             let i = &rds_dec.info;
                             let p = MpxParams { stereo: st_dec.stereo(), audio_level: 1.0, pilot_level: st_dec.pilot_level().clamp(0.0, 0.2), rds_level: if i.synced { rds_dec.level().clamp(0.0, 0.15) } else { 0.0 }, preemph_us: 0.0, limiter: false, output: 1.0 };
-                            let r = RdsData { enabled: i.synced, pi: i.pi.unwrap_or(0), ps: i.ps.clone(), rt: i.rt.clone(), pty: i.pty.unwrap_or(0), tp: i.tp, ta: i.ta, music: i.music };
+                            let r = RdsData {
+                                enabled: i.synced,
+                                pi: i.pi.unwrap_or(0),
+                                ps: i.ps.clone(),
+                                rt: i.rt.clone(),
+                                pty: i.pty.unwrap_or(0),
+                                tp: i.tp,
+                                ta: i.ta,
+                                music: i.music,
+                                af: i.af.iter().filter_map(|f| crate::mpxdsp::af_code(*f)).collect(),
+                                ct: !i.ct.is_empty(),
+                                ct_offset: i.ct_offset.unwrap_or(0),
+                            };
                             if let Ok(mut g) = pa.lock() {
                                 *g = (p, r);
                             }
@@ -595,7 +617,12 @@ impl MpxHandle {
                         }
                     }
                     Ok(chunk) => {
-                        if let Ok(g) = pa.lock() {
+                        // the page of a long PS text for now; written back so Compact outputs send the same page
+                        let page = ps_cfg.lock().ok().map(|g| pager.now(&g.0, &g.1, g.2));
+                        if let Ok(mut g) = pa.lock() {
+                            if let Some(p) = page {
+                                g.1.ps = p;
+                            }
                             enc.set_params(g.0.clone());
                             enc.set_rds(g.1.clone());
                         }
@@ -630,7 +657,7 @@ impl MpxHandle {
                 }
             }
         });
-        MpxHandle { stop, peak, status, card, links, clock, params, live_rt: Mutex::new(String::new()), scope }
+        MpxHandle { stop, peak, status, card, links, clock, params, ps_cfg, live_rt: Mutex::new(String::new()), scope }
     }
 
     /// Applies changed levels / RDS texts while running.
@@ -639,6 +666,9 @@ impl MpxHandle {
         let rt = if cfg.rt_from_playlist { rt } else { String::new() };
         if let Ok(mut g) = self.params.lock() {
             *g = (params_of(cfg), rds_of(cfg, &rt));
+        }
+        if let Ok(mut g) = self.ps_cfg.lock() {
+            *g = (cfg.ps.clone(), cfg.ps_mode.clone(), cfg.ps_interval);
         }
     }
 

@@ -319,6 +319,19 @@ impl App {
                 });
             });
             ui.add_space(2.0);
+            if !r.af.is_empty() || !r.ct.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    if !r.af.is_empty() {
+                        ui.label(RichText::new("AF").small().color(look::DIM));
+                        ui.label(r.af.iter().map(|f| format!("{f:.1}")).collect::<Vec<_>>().join("  "));
+                        ui.label(RichText::new("MHz").small().color(look::DIM));
+                    }
+                    if !r.ct.is_empty() {
+                        ui.label(RichText::new("   CT").small().color(look::DIM));
+                        ui.label(&r.ct);
+                    }
+                });
+            }
             ui.label(RichText::new("RadioText").small().color(look::DIM));
             egui::Frame::none().fill(look::INSET).rounding(5.0).inner_margin(egui::Margin::symmetric(8.0, 4.0)).show(ui, |ui| {
                 ui.set_width(ui.available_width());

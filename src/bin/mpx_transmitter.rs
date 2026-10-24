@@ -415,14 +415,12 @@ impl App {
             let c = &mut self.s.mpx;
             ch |= ui.checkbox(&mut c.rds_on, "Send RDS").changed();
             egui::Grid::new("rds").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                cap(ui, "Station name (PS)");
-                ch |= ui.add(egui::TextEdit::singleline(&mut c.ps).desired_width(110.0).char_limit(8)).changed();
-                ui.end_row();
                 cap(ui, "PI code (hex)");
                 ui.horizontal(|ui| {
                     ch |= ui.add(egui::TextEdit::singleline(&mut c.pi).desired_width(60.0).char_limit(4)).changed();
                     cap(ui, "PTY");
                     ch |= ui.add(egui::DragValue::new(&mut c.pty).range(0..=31)).changed();
+                    ui.label(RichText::new(radiomoon_mpx::rdsdec::pty_name(c.pty)).small().color(look::DIM));
                 });
                 ui.end_row();
                 cap(ui, "RadioText");
@@ -435,6 +433,63 @@ impl App {
                 ch |= ui.checkbox(&mut c.ta, "TA").changed();
                 ch |= ui.checkbox(&mut c.music, "Music").changed();
             });
+        });
+        card(ui, "Station name (PS)", |ui| {
+            let c = &mut self.s.mpx;
+            ui.horizontal_wrapped(|ui| {
+                ch |= ui.selectable_value(&mut c.ps_mode, "static".to_string(), "Fixed (8 characters)").changed();
+                ch |= ui.selectable_value(&mut c.ps_mode, "pages".to_string(), "Long text in pages").changed();
+                ch |= ui.selectable_value(&mut c.ps_mode, "scroll".to_string(), "Long text scrolling").changed();
+            });
+            let long = c.ps_mode != "static";
+            ch |= ui
+                .add(egui::TextEdit::singleline(&mut c.ps).hint_text(if long { "RADIO MOON FM - THE BEST MUSIC" } else { "RADIOMON" }).desired_width(ui.available_width()).char_limit(if long { 128 } else { 8 }))
+                .changed();
+            if long {
+                ui.horizontal(|ui| {
+                    cap(ui, if c.ps_mode == "scroll" { "Seconds per character" } else { "Seconds per page" });
+                    ch |= ui.add(egui::DragValue::new(&mut c.ps_interval).range(0.3..=30.0).speed(0.1).fixed_decimals(1).suffix(" s")).changed();
+                });
+                // preview of what radios show
+                let pages = radiomoon_mpx::mpxdsp::PsPager::pages(&c.ps, &c.ps_mode);
+                let shown = if c.ps_mode == "scroll" { format!("{} steps", pages.len()) } else { format!("{} pages", pages.len()) };
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(shown).small().color(look::DIM));
+                    for p in pages.iter().take(if c.ps_mode == "scroll" { 6 } else { 12 }) {
+                        egui::Frame::none().fill(look::INSET).rounding(4.0).inner_margin(egui::Margin::symmetric(5.0, 1.0)).show(ui, |ui| {
+                            ui.label(RichText::new(p.as_str()).monospace().color(look::GOOD));
+                        });
+                    }
+                });
+                ui.label(
+                    RichText::new("A complete station name is always sent before the next page, so radios never show a mix. Note: the RDS standard asks for a fixed PS; some car radios also use it to store the station, so keep the pages slow (3 s or more).")
+                        .small()
+                        .color(look::DIM),
+                );
+            }
+        });
+        card(ui, "Alternative frequencies (AF)", |ui| {
+            let c = &mut self.s.mpx;
+            ch |= ui.add(egui::TextEdit::singleline(&mut c.af).hint_text("e.g. 94.3, 101.5, 105.0").desired_width(ui.available_width())).changed();
+            let codes = radiomoon_mpx::mpxdsp::parse_af(&c.af);
+            let list: Vec<String> = codes.iter().map(|&k| format!("{:.1}", radiomoon_mpx::mpxdsp::af_mhz(k))).collect();
+            ui.label(
+                RichText::new(if list.is_empty() { "No AF list is sent. Enter the other frequencies of this programme (87.6 - 107.9 MHz), so radios can switch to the strongest one.".to_string() } else { format!("Sent: {} MHz ({} of up to 25)", list.join(", "), list.len()) })
+                    .small()
+                    .color(look::DIM),
+            );
+        });
+        card(ui, "Clock time (CT)", |ui| {
+            let c = &mut self.s.mpx;
+            ch |= ui.checkbox(&mut c.ct_on, "Send the time and date once a minute (radios set their clocks)").changed();
+            ui.add_enabled_ui(c.ct_on, |ui| {
+                ui.horizontal(|ui| {
+                    cap(ui, "Local time offset");
+                    ch |= ui.add(egui::DragValue::new(&mut c.ct_offset_h).range(-12.0..=14.0).speed(0.5).fixed_decimals(1).prefix("UTC ")).changed();
+                    ui.label(RichText::new("Greece: +2 in winter, +3 in summer").small().color(look::DIM));
+                });
+            });
+            ui.label(RichText::new("The time comes from this computer's clock (UTC); keep it synchronised.").small().color(look::DIM));
         });
         ch
     }
