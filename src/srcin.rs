@@ -375,3 +375,97 @@ fn stream_thread(url: String, sh: Arc<Shared>) {
         }
     }
 }
+
+// ---------------------------------------------------------------- MPX input (a ready composite signal)
+
+/// Captures a ready FM composite signal (MPX) from a sound card input at exactly 192 kHz, one channel
+/// (0 = left, 1 = right), with the level in dB. The blocks come at the sound card's pace.
+pub fn start_mpx(device: &str, channel: usize, gain_db: f32) -> (SrcHandle, Receiver<Vec<f32>>) {
+    let sh = Arc::new(Shared {
+        q: Mutex::new(VecDeque::new()),
+        cap: 0,
+        stop: AtomicBool::new(false),
+        gain: 10f32.powf(gain_db / 20.0),
+        peak: AtomicU32::new(0),
+        status: Mutex::new("Starting ...".into()),
+        now: Mutex::new(String::new()),
+    });
+    let (tx, rx) = sync_channel::<Vec<f32>>(256);
+    let (s2, device) = (sh.clone(), device.to_string());
+    std::thread::spawn(move || mpx_capture_thread(device, channel, s2, tx));
+    (SrcHandle { sh }, rx)
+}
+
+fn mpx_capture_thread(device: String, channel: usize, sh: Arc<Shared>, tx: std::sync::mpsc::SyncSender<Vec<f32>>) {
+    use rodio::cpal::{SampleRate, StreamConfig};
+    const FS: u32 = 192_000;
+    let host = rodio::cpal::default_host();
+    let dev = host.input_devices().ok().and_then(|mut it| it.find(|d| d.name().map(|n| n == device).unwrap_or(false))).or_else(|| host.default_input_device());
+    let Some(dev) = dev else {
+        sh.set_status("MPX input: no sound input found");
+        return;
+    };
+    let name = dev.name().unwrap_or_default();
+    // a configuration that runs at exactly 192 kHz (no resampling of the composite)
+    let mut best: Option<(u32, rodio::cpal::SupportedStreamConfig)> = None;
+    if let Ok(ranges) = dev.supported_input_configs() {
+        for r in ranges {
+            if r.min_sample_rate().0 <= FS && FS <= r.max_sample_rate().0 {
+                let score = match r.sample_format() {
+                    SampleFormat::F32 => 4,
+                    SampleFormat::I32 => 3,
+                    SampleFormat::I16 => 2,
+                    _ => 0,
+                };
+                if score > 0 && best.as_ref().map(|b| score > b.0).unwrap_or(true) {
+                    best = Some((score, r.with_sample_rate(SampleRate(FS))));
+                }
+            }
+        }
+    }
+    let Some((_, sc)) = best else {
+        sh.set_status(&format!("MPX input: \"{name}\" does not support 192 kHz recording"));
+        return;
+    };
+    let fmt = sc.sample_format();
+    let cfg: StreamConfig = sc.into();
+    let ch = cfg.channels.max(1) as usize;
+    let pick = channel.min(ch - 1);
+    let (gain, sh2) = (sh.gain, sh.clone());
+    let mut handle = move |d: &mut dyn Iterator<Item = f32>| {
+        let mut blk: Vec<f32> = Vec::with_capacity(4096);
+        let mut pk = 0f32;
+        for (i, v) in d.enumerate() {
+            if i % ch == pick {
+                let x = v * gain;
+                pk = pk.max(x.abs());
+                blk.push(x);
+            }
+        }
+        let old = f32::from_bits(sh2.peak.load(Ordering::Relaxed));
+        sh2.peak.store(pk.max(old * 0.9).to_bits(), Ordering::Relaxed);
+        let _ = tx.try_send(blk); // the program is behind: drop rather than block the sound card
+    };
+    let err = |e| eprintln!("MPX input: {e}");
+    let stream = match fmt {
+        SampleFormat::F32 => dev.build_input_stream(&cfg, move |d: &[f32], _| handle(&mut d.iter().copied()), err, None),
+        SampleFormat::I32 => dev.build_input_stream(&cfg, move |d: &[i32], _| handle(&mut d.iter().map(|x| *x as f32 / 2_147_483_648.0)), err, None),
+        _ => dev.build_input_stream(&cfg, move |d: &[i16], _| handle(&mut d.iter().map(|x| *x as f32 / 32_768.0)), err, None),
+    };
+    let stream = match stream {
+        Ok(s) => s,
+        Err(e) => {
+            sh.set_status(&format!("MPX input: {e}"));
+            return;
+        }
+    };
+    if let Err(e) = stream.play() {
+        sh.set_status(&format!("MPX input: {e}"));
+        return;
+    }
+    sh.set_status(&format!("MPX input: {name}, 192 kHz, {} channel", if pick == 0 { "left" } else { "right" }));
+    while !sh.stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(stream);
+}

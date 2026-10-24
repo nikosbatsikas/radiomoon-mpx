@@ -6,7 +6,7 @@
 
 use eframe::egui::{self, RichText};
 use radiomoon_mpx::host::Host;
-use radiomoon_mpx::look::{self, card, inset, pill, tile};
+use radiomoon_mpx::look::{self, card, inset, pill, Tile};
 use radiomoon_mpx::model::{IpTarget, MpxCfg};
 use radiomoon_mpx::mpx::{LinkStat, MpxHandle};
 use radiomoon_mpx::mpxscope::{self, Scope};
@@ -25,9 +25,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 struct Saved {
-    /// "stream" | "input"
+    /// "stream" | "input" (audio) | "mpx" (a ready composite signal from a 192 kHz sound card input)
     kind: String,
     device: String,
+    mpx_device: String,
+    /// MPX input: 0 = left channel, 1 = right channel
+    mpx_channel: u8,
     url: String,
     gain_db: f32,
     close_to_tray: bool,
@@ -38,7 +41,7 @@ struct Saved {
 impl Default for Saved {
     fn default() -> Self {
         let mpx = MpxCfg { autostart: true, card_on: true, rt_from_playlist: true, ..MpxCfg::default() };
-        Saved { kind: "stream".into(), device: String::new(), url: String::new(), gain_db: 0.0, close_to_tray: true, fit_window: true, mpx }
+        Saved { kind: "stream".into(), device: String::new(), mpx_device: String::new(), mpx_channel: 0, url: String::new(), gain_db: 0.0, close_to_tray: true, fit_window: true, mpx }
     }
 }
 
@@ -60,7 +63,7 @@ fn cfg_path() -> PathBuf {
 fn load() -> Saved {
     let mut s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     s.mpx.migrate();
-    if s.kind != "input" {
+    if s.kind != "input" && s.kind != "mpx" {
         s.kind = "stream".into(); // the folder source of older versions is gone
     }
     s
@@ -68,6 +71,17 @@ fn load() -> Saved {
 
 fn src_cfg(s: &Saved) -> SrcCfg {
     SrcCfg { kind: s.kind.clone(), device: s.device.clone(), url: s.url.clone(), gain_db: s.gain_db }
+}
+
+/// Starts the source and the transmitter: an audio source through the MPX generator, or a ready MPX input as it is.
+fn start_chain(s: &Saved) -> (SrcHandle, MpxHandle) {
+    if s.kind == "mpx" {
+        let (h, rx) = srcin::start_mpx(&s.mpx_device, s.mpx_channel as usize, s.gain_db);
+        (h, MpxHandle::start_input(&s.mpx, rx))
+    } else {
+        let (h, rx) = srcin::start(&src_cfg(s));
+        (h, MpxHandle::start(&s.mpx, rx))
+    }
 }
 
 fn modified(p: &std::path::Path) -> Option<std::time::SystemTime> {
@@ -83,8 +97,7 @@ fn service_work(stop: Arc<AtomicBool>) {
     let st_path = status::path_for(&path);
     let mut s = load();
     let mut stamp = modified(&path);
-    let (src, rx) = srcin::start(&src_cfg(&s));
-    let m = MpxHandle::start(&s.mpx, rx);
+    let (src, m) = start_chain(&s);
     let mut last_now = String::new();
     let mut checked = Instant::now();
     while !stop.load(Ordering::Relaxed) {
@@ -167,8 +180,8 @@ struct App {
 impl App {
     fn start(&mut self) {
         self.stop();
-        let (h, rx) = srcin::start(&src_cfg(&self.s));
-        self.mpx = Some(MpxHandle::start(&self.s.mpx, rx));
+        let (h, m) = start_chain(&self.s);
+        self.mpx = Some(m);
         self.src = Some(h);
         self.last_now.clear();
         self.pending = false;
@@ -296,13 +309,16 @@ impl App {
             ui.add_space(4.0);
             let total: f32 = l.links.iter().map(|(_, x)| x.mbps).sum();
             let up = l.links.iter().filter(|(_, x)| x.ok).count();
-            ui.horizontal_wrapped(|ui| {
-                tile(ui, "Deviation peak", &format!("{:.1}", l.peak * 75.0), "kHz", if l.peak > 1.0 { look::BAD } else { look::TEXT }, 110.0);
-                tile(ui, "IP bandwidth (total)", &look::mbps(total), "Mbit/s", look::ACCENT, 150.0);
-                tile(ui, "IP outputs", &format!("{up} / {}", l.links.len()), "working", if up == l.links.len() { look::GOOD } else { look::WARN }, 120.0);
-                let card_on = !l.card.is_empty();
-                tile(ui, "Sound card", if card_on { "On" } else { "Off" }, "192 kHz", if card_on { look::GOOD } else { look::DIM }, 100.0);
-            });
+            let card_on = !l.card.is_empty();
+            look::tiles(
+                ui,
+                &[
+                    Tile::new("Deviation peak", format!("{:.1}", l.peak * 75.0), "kHz", if l.peak > 1.0 { look::BAD } else { look::TEXT }),
+                    Tile::new("IP bandwidth", look::mbps(total), "Mbit/s", look::ACCENT),
+                    Tile::new("IP outputs", format!("{up} / {}", l.links.len()), "working", if up == l.links.len() { look::GOOD } else { look::WARN }),
+                    Tile::new("Sound card", if card_on { "On" } else { "Off" }, "192 kHz", if card_on { look::GOOD } else { look::DIM }),
+                ],
+            );
             ui.horizontal(|ui| {
                 look::dot(ui, look::GOOD);
                 ui.label(&l.source);
@@ -323,14 +339,32 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 restart |= ui.selectable_value(&mut self.s.kind, "stream".to_string(), "Internet stream").changed();
                 restart |= ui.selectable_value(&mut self.s.kind, "input".to_string(), "Sound input").changed();
+                restart |= ui.selectable_value(&mut self.s.kind, "mpx".to_string(), "MPX input (192 kHz)").changed();
             });
             ui.add_space(2.0);
-            if self.s.kind == "stream" {
-                restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
-                ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
-            } else {
-                let w = (ui.available_width() - 10.0).max(150.0);
-                restart |= combo(ui, "in", &mut self.s.device, &self.ins, w);
+            match self.s.kind.as_str() {
+                "stream" => {
+                    restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
+                    ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
+                }
+                "mpx" => {
+                    let w = (ui.available_width() - 10.0).max(150.0);
+                    restart |= combo(ui, "mpxin", &mut self.s.mpx_device, &self.ins, w);
+                    ui.horizontal(|ui| {
+                        cap(ui, "Channel");
+                        restart |= ui.selectable_value(&mut self.s.mpx_channel, 0, "Left").changed();
+                        restart |= ui.selectable_value(&mut self.s.mpx_channel, 1, "Right").changed();
+                    });
+                    ui.label(
+                        RichText::new("A ready FM composite signal (e.g. the MPX output of a processor or stereo encoder) from a sound card input that records at 192 kHz. It is sent as it is: the Signal and RDS settings are not used, and the IP outputs need a composite format (PCM or FLAC, not Compact).")
+                            .small()
+                            .color(look::DIM),
+                    );
+                }
+                _ => {
+                    let w = (ui.available_width() - 10.0).max(150.0);
+                    restart |= combo(ui, "in", &mut self.s.device, &self.ins, w);
+                }
             }
             ui.horizontal(|ui| {
                 cap(ui, "Level");
@@ -584,7 +618,7 @@ impl eframe::App for App {
                 tagline: "FM multiplex generator with RDS, sent to sound cards and over IP",
                 features: &[
                     "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
-                    "Internet stream or sound input as the source",
+                    "Internet stream, sound input or a ready MPX input (192 kHz) as the source",
                     "Any number of IP receivers: UDP or TCP, L16/L20/L24, FLAC lossless or Compact MPX (FLAC / Opus)",
                     "QoS (DSCP) marking, live bandwidth per receiver",
                     "Runs as a Windows / Linux service, system tray icon",
@@ -617,6 +651,11 @@ impl eframe::App for App {
                     Tab::Source => restart |= self.source_card(ui),
                     Tab::Ip => restart |= self.ip_card(ui, &links, running),
                     Tab::Card => restart |= self.card_output(ui),
+                    Tab::Signal | Tab::Rds if self.s.kind == "mpx" => {
+                        card(ui, "", |ui| {
+                            ui.label(RichText::new("The source is an MPX input: the composite signal comes ready from the sound card, so these settings are not used.").color(look::WARN));
+                        });
+                    }
                     Tab::Signal => ch |= self.signal_card(ui),
                     Tab::Rds => ch |= self.rds_card(ui),
                     Tab::Service => {
