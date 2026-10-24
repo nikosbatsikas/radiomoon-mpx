@@ -3,6 +3,7 @@
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
 ## 1.9.0
+- **AES67 / Dante source (Transmitter):** a new audio source, "AES67 / Dante": receives an AES67 stream (RTP L24 or L16 at 44.1, 48 or 96 kHz, multicast or unicast, any number of channels; you choose the left and right channel). Streams that announce themselves (SAP / SDP, as Dante, Ravenna and AES67 devices do) appear in a list to choose from. Lost packets are filled with silence so the timing stays exact; the generator takes the stream's sample rate directly. Dante: switch the device to AES67 mode in Dante Controller and create a multicast flow (Dante's own format is closed and licensed by Audinate); Dante Virtual Soundcard also works through "Sound input".
 - **RDS (Transmitter), new settings in the RDS tab:**
   - **Long station name (PS):** a longer text is shown 8 characters at a time - *in pages* (whole words, centred) or *scrolling* - with the time per page in seconds, and a preview of the pages. A complete name is always sent before the next page, so radios never show a mix; Compact MPX and SFN sites show the same page.
   - **Alternative frequencies (AF):** a list of up to 25 frequencies (87.6 - 107.9 MHz, method A) in group 0A, so radios can switch to the strongest transmitter of the programme.

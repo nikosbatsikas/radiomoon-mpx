@@ -11,7 +11,7 @@ use radiomoon_mpx::model::{IpTarget, MpxCfg};
 use radiomoon_mpx::mpx::{LinkStat, MpxHandle};
 use radiomoon_mpx::mpxscope::{self, Scope};
 use radiomoon_mpx::service;
-use radiomoon_mpx::srcin::{self, SrcCfg, SrcHandle};
+use radiomoon_mpx::srcin::{self, Aes67Cfg, Aes67Finder, SrcCfg, SrcHandle};
 use radiomoon_mpx::status::{self, TxStatus};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 struct Saved {
-    /// "stream" | "input" (audio) | "mpx" (a ready composite signal from a 192 kHz sound card input)
+    /// "stream" | "input" (audio) | "aes67" (AES67 / Dante over IP) | "mpx" (a ready composite signal from a 192 kHz
+    /// sound card input)
     kind: String,
+    aes67: Aes67Cfg,
     device: String,
     mpx_device: String,
     /// MPX input: 0 = left channel, 1 = right channel
@@ -41,7 +43,7 @@ struct Saved {
 impl Default for Saved {
     fn default() -> Self {
         let mpx = MpxCfg { autostart: true, card_on: true, rt_from_playlist: true, ..MpxCfg::default() };
-        Saved { kind: "stream".into(), device: String::new(), mpx_device: String::new(), mpx_channel: 0, url: String::new(), gain_db: 0.0, close_to_tray: true, fit_window: true, mpx }
+        Saved { kind: "stream".into(), aes67: Aes67Cfg::default(), device: String::new(), mpx_device: String::new(), mpx_channel: 0, url: String::new(), gain_db: 0.0, close_to_tray: true, fit_window: true, mpx }
     }
 }
 
@@ -63,7 +65,7 @@ fn cfg_path() -> PathBuf {
 fn load() -> Saved {
     let mut s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     s.mpx.migrate();
-    if s.kind != "input" && s.kind != "mpx" {
+    if !["input", "mpx", "aes67"].contains(&s.kind.as_str()) {
         s.kind = "stream".into(); // the folder source of older versions is gone
     }
     s
@@ -78,6 +80,9 @@ fn start_chain(s: &Saved) -> (SrcHandle, MpxHandle) {
     if s.kind == "mpx" {
         let (h, rx) = srcin::start_mpx(&s.mpx_device, s.mpx_channel as usize, s.gain_db);
         (h, MpxHandle::start_input(&s.mpx, rx))
+    } else if s.kind == "aes67" {
+        let (h, rx, rate) = srcin::start_aes67(&s.aes67, s.gain_db);
+        (h, MpxHandle::start_rate(&s.mpx, rx, rate))
     } else {
         let (h, rx) = srcin::start(&src_cfg(s));
         (h, MpxHandle::start(&s.mpx, rx))
@@ -178,6 +183,8 @@ struct App {
     logo_tex: Option<egui::TextureHandle>,
     fit_last: f32,
     ports: Vec<String>,
+    /// Listens for AES67 stream announcements while the AES67 source is shown.
+    finder: Option<Aes67Finder>,
 }
 
 impl App {
@@ -342,6 +349,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 restart |= ui.selectable_value(&mut self.s.kind, "stream".to_string(), "Internet stream").changed();
                 restart |= ui.selectable_value(&mut self.s.kind, "input".to_string(), "Sound input").changed();
+                restart |= ui.selectable_value(&mut self.s.kind, "aes67".to_string(), "AES67 / Dante").changed();
                 restart |= ui.selectable_value(&mut self.s.kind, "mpx".to_string(), "MPX input (192 kHz)").changed();
             });
             ui.add_space(2.0);
@@ -350,6 +358,7 @@ impl App {
                     restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
                     ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
                 }
+                "aes67" => restart |= self.aes67_ui(ui),
                 "mpx" => {
                     let w = (ui.available_width() - 10.0).max(150.0);
                     restart |= combo(ui, "mpxin", &mut self.s.mpx_device, &self.ins, w);
@@ -375,6 +384,68 @@ impl App {
             });
         });
         restart
+    }
+
+    /// AES67 source: announced streams (SAP) and the stream settings.
+    fn aes67_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut ch = false;
+        if self.finder.is_none() {
+            self.finder = Some(Aes67Finder::start(&self.s.aes67.iface));
+        }
+        let found = self.finder.as_ref().map(|f| f.streams()).unwrap_or_default();
+        let a = &mut self.s.aes67;
+        ui.horizontal(|ui| {
+            cap(ui, "Announced streams");
+            let shown = if found.is_empty() { "None heard yet".to_string() } else { format!("{} found - choose ...", found.len()) };
+            egui::ComboBox::from_id_salt("aesfound").width(260.0).selected_text(shown).show_ui(ui, |ui| {
+                for f in &found {
+                    let label = format!("{} - {}:{} {} {} Hz {} ch", if f.name.is_empty() { "(no name)" } else { &f.name }, f.group, f.port, f.encoding, f.rate, f.channels);
+                    if ui.selectable_label(a.group == f.group && a.port == f.port, label).clicked() {
+                        let iface = a.iface.clone();
+                        *a = f.clone();
+                        a.iface = iface;
+                        ch = true;
+                    }
+                }
+            });
+        });
+        egui::Grid::new("aes").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            cap(ui, "Multicast address");
+            ui.horizontal(|ui| {
+                ch |= ui.add(egui::TextEdit::singleline(&mut a.group).hint_text("239.69.x.x (empty = unicast)").desired_width(150.0)).changed();
+                cap(ui, "Port");
+                ch |= ui.add(egui::DragValue::new(&mut a.port).range(1..=65535)).changed();
+            });
+            ui.end_row();
+            cap(ui, "Format");
+            ui.horizontal(|ui| {
+                ch |= ui.selectable_value(&mut a.encoding, "L24".to_string(), "L24").changed();
+                ch |= ui.selectable_value(&mut a.encoding, "L16".to_string(), "L16").changed();
+                for r in [44_100u32, 48_000, 96_000] {
+                    ch |= ui.selectable_value(&mut a.rate, r, format!("{} kHz", r as f32 / 1000.0)).changed();
+                }
+            });
+            ui.end_row();
+            cap(ui, "Channels");
+            ui.horizontal(|ui| {
+                ch |= ui.add(egui::DragValue::new(&mut a.channels).range(1..=64).suffix(" in the stream")).changed();
+                let n = a.channels.max(1);
+                cap(ui, "Left");
+                ch |= ui.add(egui::DragValue::new(&mut a.ch_l).range(0..=n - 1).custom_formatter(|v, _| format!("{}", v as u32 + 1))).changed();
+                cap(ui, "Right");
+                ch |= ui.add(egui::DragValue::new(&mut a.ch_r).range(0..=n - 1).custom_formatter(|v, _| format!("{}", v as u32 + 1))).changed();
+            });
+            ui.end_row();
+            cap(ui, "Interface address");
+            ch |= ui.add(egui::TextEdit::singleline(&mut a.iface).hint_text("default").desired_width(150.0)).changed();
+            ui.end_row();
+        });
+        ui.label(
+            RichText::new("AES67: RTP L24 / L16, usually 48 kHz, multicast. Streams that announce themselves (SAP) appear in the list. Dante: switch the Dante device to AES67 mode in Dante Controller (Device Config > AES67 Config), set a multicast address and create a multicast transmit flow; it then appears here. Dante Virtual Soundcard also works through \"Sound input\". The sender's PTP clock is not needed here: the MPX follows the stream's own rate.")
+                .small()
+                .color(look::DIM),
+        );
+        ch
     }
 
     fn signal_card(&mut self, ui: &mut egui::Ui) -> bool {
@@ -697,7 +768,7 @@ impl eframe::App for App {
                 tagline: "FM multiplex generator with RDS, sent to sound cards and over IP",
                 features: &[
                     "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
-                    "Internet stream, sound input or a ready MPX input (192 kHz) as the source",
+                    "Internet stream, sound input, AES67 / Dante or a ready MPX input (192 kHz) as the source",
                     "Any number of IP receivers: UDP or TCP, L16/L20/L24, FLAC lossless or Compact MPX (FLAC / Opus)",
                     "QoS (DSCP), live bandwidth, SFN time stamps from GPS or PTP (IEEE 1588v2)",
                     "Runs as a Windows / Linux service, system tray icon",
@@ -830,6 +901,7 @@ fn main() -> eframe::Result<()> {
                 logo_tex: None,
                 fit_last: 0.0,
                 ports: radiomoon_mpx::clock::serial_ports(),
+                finder: None,
             }))
         }),
     )

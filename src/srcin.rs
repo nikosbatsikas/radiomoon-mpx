@@ -469,3 +469,297 @@ fn mpx_capture_thread(device: String, channel: usize, sh: Arc<Shared>, tx: std::
     }
     drop(stream);
 }
+
+// ---------------------------------------------------------------- AES67 (and Dante in AES67 mode)
+
+/// An AES67 stream to receive: RTP L24 / L16 at 44.1, 48 or 96 kHz, usually multicast.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Aes67Cfg {
+    /// Multicast group (e.g. 239.69.1.10) or empty for unicast to this computer.
+    pub group: String,
+    pub port: u16,
+    /// Address of the network interface to receive on (empty = the default interface).
+    pub iface: String,
+    /// "L24" | "L16"
+    pub encoding: String,
+    pub rate: u32,
+    pub channels: u16,
+    /// Channels used as left and right (0 = the first).
+    pub ch_l: u16,
+    pub ch_r: u16,
+    /// Name of the stream (from its announcement), for display.
+    pub name: String,
+}
+
+impl Default for Aes67Cfg {
+    fn default() -> Self {
+        Aes67Cfg { group: "239.69.1.10".into(), port: 5004, iface: String::new(), encoding: "L24".into(), rate: 48_000, channels: 2, ch_l: 0, ch_r: 1, name: String::new() }
+    }
+}
+
+/// Reads an SDP description (as AES67 / Dante / Ravenna devices announce them with SAP).
+pub fn parse_sdp(sdp: &str) -> Option<Aes67Cfg> {
+    let mut c = Aes67Cfg { group: String::new(), ..Aes67Cfg::default() };
+    let mut pt: Option<String> = None;
+    let mut have_media = false;
+    for line in sdp.lines().map(|l| l.trim()) {
+        if let Some(v) = line.strip_prefix("s=") {
+            c.name = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("c=IN IP4 ") {
+            c.group = v.split('/').next().unwrap_or("").trim().to_string();
+        } else if let Some(v) = line.strip_prefix("m=audio ") {
+            let f: Vec<&str> = v.split_whitespace().collect();
+            c.port = f.first()?.parse().ok()?;
+            pt = f.get(2).map(|s| s.to_string());
+            have_media = true;
+        } else if let Some(v) = line.strip_prefix("a=rtpmap:") {
+            // a=rtpmap:98 L24/48000/2
+            let (p, enc) = v.split_once(' ')?;
+            if pt.as_deref().map(|x| x == p).unwrap_or(true) {
+                let parts: Vec<&str> = enc.split('/').collect();
+                c.encoding = parts.first()?.to_ascii_uppercase();
+                c.rate = parts.get(1).and_then(|r| r.parse().ok()).unwrap_or(48_000);
+                c.channels = parts.get(2).and_then(|r| r.parse().ok()).unwrap_or(1);
+            }
+        }
+    }
+    if !have_media || !(c.encoding == "L24" || c.encoding == "L16") {
+        return None;
+    }
+    c.ch_l = 0;
+    c.ch_r = if c.channels > 1 { 1 } else { 0 };
+    Some(c)
+}
+
+/// The SDP text inside a SAP announcement (RFC 2974); None for deletions and other payloads.
+pub fn sap_sdp(p: &[u8]) -> Option<String> {
+    if p.len() < 8 || p[0] >> 5 != 1 || p[0] & 0x04 != 0 {
+        return None; // not SAP version 1, or a deletion
+    }
+    let ipv6 = p[0] & 0x10 != 0;
+    let mut at = 4 + if ipv6 { 16 } else { 4 } + p[1] as usize * 4;
+    let rest = p.get(at..)?;
+    if rest.starts_with(b"v=0") {
+        return Some(String::from_utf8_lossy(rest).to_string());
+    }
+    // a payload type such as "application/sdp\0" comes first
+    let nul = rest.iter().position(|&b| b == 0)?;
+    at += nul + 1;
+    Some(String::from_utf8_lossy(p.get(at..)?).to_string())
+}
+
+/// Listens for stream announcements (SAP, 239.255.255.255 and 224.2.127.254, port 9875) and keeps the list.
+pub struct Aes67Finder {
+    pub list: Arc<Mutex<Vec<(Aes67Cfg, Instant)>>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Aes67Finder {
+    pub fn start(iface: &str) -> Aes67Finder {
+        let list: Arc<Mutex<Vec<(Aes67Cfg, Instant)>>> = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (l2, s2) = (list.clone(), stop.clone());
+        let ifa: std::net::Ipv4Addr = iface.trim().parse().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+        std::thread::spawn(move || {
+            let Ok(sock) = reuse_socket(9875) else { return };
+            for g in ["239.255.255.255", "224.2.127.254"] {
+                if let Ok(a) = g.parse::<std::net::Ipv4Addr>() {
+                    let _ = sock.join_multicast_v4(&a, &ifa);
+                }
+            }
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+            let mut buf = vec![0u8; 4096];
+            while !s2.load(Ordering::Relaxed) {
+                if let Ok((n, _)) = sock.recv_from(&mut buf) {
+                    if let Some(c) = sap_sdp(&buf[..n]).and_then(|t| parse_sdp(&t)) {
+                        if let Ok(mut g) = l2.lock() {
+                            g.retain(|(x, _)| !(x.group == c.group && x.port == c.port));
+                            g.push((c, Instant::now()));
+                            g.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+                        }
+                    }
+                }
+                // announcements come every 30 s or so: forget streams not heard for 5 minutes
+                if let Ok(mut g) = l2.lock() {
+                    g.retain(|(_, t)| t.elapsed() < Duration::from_secs(300));
+                }
+            }
+        });
+        Aes67Finder { list, stop }
+    }
+
+    pub fn streams(&self) -> Vec<Aes67Cfg> {
+        self.list.lock().map(|g| g.iter().map(|(c, _)| c.clone()).collect()).unwrap_or_default()
+    }
+}
+
+impl Drop for Aes67Finder {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+fn reuse_socket(port: u16) -> std::io::Result<std::net::UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    s.set_reuse_address(true)?;
+    s.bind(&std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, port).into())?;
+    Ok(s.into())
+}
+
+/// Takes the samples of one RTP packet: big-endian L24 / L16, `ch` channels interleaved; appends L R as f32.
+pub fn aes67_samples(payload: &[u8], bytes: usize, ch: usize, l: usize, r: usize, gain: f32, out: &mut Vec<f32>) -> usize {
+    let frame = bytes * ch;
+    let mut n = 0;
+    for f in payload.chunks_exact(frame) {
+        let at = |c: usize| -> f32 {
+            let b = &f[c.min(ch - 1) * bytes..];
+            if bytes == 3 {
+                ((((b[0] as i32) << 24) | ((b[1] as i32) << 16) | ((b[2] as i32) << 8)) >> 8) as f32 / 8_388_608.0
+            } else {
+                i16::from_be_bytes([b[0], b[1]]) as f32 / 32_768.0
+            }
+        };
+        out.push(at(l) * gain);
+        out.push(at(r) * gain);
+        n += 1;
+    }
+    n
+}
+
+/// Receives an AES67 stream. The blocks (interleaved stereo at the stream's rate) come at the sender's pace;
+/// the sample rate of the blocks is returned too.
+pub fn start_aes67(c: &Aes67Cfg, gain_db: f32) -> (SrcHandle, Receiver<Vec<f32>>, u32) {
+    let sh = Arc::new(Shared {
+        q: Mutex::new(VecDeque::new()),
+        cap: 0,
+        stop: AtomicBool::new(false),
+        gain: 10f32.powf(gain_db / 20.0),
+        peak: AtomicU32::new(0),
+        status: Mutex::new("Starting ...".into()),
+        now: Mutex::new(String::new()),
+    });
+    let rate = if [44_100, 48_000, 96_000].contains(&c.rate) { c.rate } else { 48_000 };
+    let (tx, rx) = sync_channel::<Vec<f32>>(512);
+    let (s2, cfg) = (sh.clone(), c.clone());
+    std::thread::spawn(move || aes67_thread(cfg, rate, s2, tx));
+    (SrcHandle { sh }, rx, rate)
+}
+
+fn aes67_thread(c: Aes67Cfg, rate: u32, sh: Arc<Shared>, tx: std::sync::mpsc::SyncSender<Vec<f32>>) {
+    let sock = match reuse_socket(c.port) {
+        Ok(s) => s,
+        Err(e) => {
+            sh.set_status(&format!("AES67: cannot listen on port {}: {e}", c.port));
+            return;
+        }
+    };
+    let ifa: std::net::Ipv4Addr = c.iface.trim().parse().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+    let group = c.group.trim().parse::<std::net::Ipv4Addr>().ok().filter(|g| g.is_multicast());
+    if let Some(g) = group {
+        if let Err(e) = sock.join_multicast_v4(&g, &ifa) {
+            sh.set_status(&format!("AES67: cannot join {g}: {e}"));
+            return;
+        }
+    }
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+    let bytes = if c.encoding == "L16" { 2 } else { 3 };
+    let ch = c.channels.max(1) as usize;
+    let (l, r) = (c.ch_l as usize, c.ch_r as usize);
+    let mut buf = vec![0u8; 9000];
+    let mut blk: Vec<f32> = Vec::with_capacity(2048);
+    let mut expected: Option<u32> = None;
+    let (mut lost, mut packets, mut from) = (0u64, 0u64, String::from("-"));
+    let mut shown = Instant::now() - Duration::from_secs(5);
+    let block = (rate / 200) as usize; // hand on about every 5 ms
+    let where_ = match group {
+        Some(g) => format!("{g}:{}", c.port),
+        None => format!("port {}", c.port),
+    };
+    sh.set_status(&format!("AES67: waiting for the stream on {where_} ..."));
+    while !sh.stop.load(Ordering::Relaxed) {
+        let got = sock.recv_from(&mut buf);
+        if let Ok((n, a)) = got {
+            let p = &buf[..n];
+            if p.len() < 12 || p[0] >> 6 != 2 {
+                continue;
+            }
+            let mut off = 12 + 4 * (p[0] & 0x0F) as usize;
+            if p[0] & 0x10 != 0 && p.len() >= off + 4 {
+                off += 4 + 4 * u16::from_be_bytes([p[off + 2], p[off + 3]]) as usize;
+            }
+            let mut end = p.len();
+            if p[0] & 0x20 != 0 {
+                end = end.saturating_sub(p[end - 1] as usize);
+            }
+            if off >= end {
+                continue;
+            }
+            let ts = u32::from_be_bytes([p[4], p[5], p[6], p[7]]);
+            let frames = (end - off) / (bytes * ch);
+            if let Some(e) = expected {
+                let d = ts.wrapping_sub(e) as i32;
+                if d < 0 && d > -(rate as i32) {
+                    continue; // late or doubled
+                }
+                if d > 0 && d < rate as i32 / 10 {
+                    // lost packets: silence in their place, so the timing stays right
+                    lost += 1;
+                    blk.resize(blk.len() + d as usize * 2, 0.0);
+                }
+            }
+            expected = Some(ts.wrapping_add(frames as u32));
+            aes67_samples(&p[off..end], bytes, ch, l, r, sh.gain, &mut blk);
+            packets += 1;
+            from = a.ip().to_string();
+        }
+        if blk.len() >= block * 2 || (got.is_err() && !blk.is_empty()) {
+            let pk = blk.iter().fold(0f32, |m, v| m.max(v.abs()));
+            let old = f32::from_bits(sh.peak.load(Ordering::Relaxed));
+            sh.peak.store(pk.max(old * 0.9).to_bits(), Ordering::Relaxed);
+            let _ = tx.try_send(std::mem::take(&mut blk));
+        }
+        if shown.elapsed() > Duration::from_millis(700) {
+            shown = Instant::now();
+            let name = if c.name.is_empty() { String::new() } else { format!("\"{}\" ", c.name) };
+            if packets == 0 {
+                sh.set_status(&format!("AES67: waiting for the stream {name}on {where_} ..."));
+            } else {
+                sh.set_status(&format!("AES67 {name}from {from}: {} {} Hz, {ch} ch, lost packets {lost}", c.encoding, rate));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod aes67_tests {
+    use super::*;
+
+    #[test]
+    fn sdp_and_sap() {
+        let sdp = "v=0\r\no=- 1 1 IN IP4 192.168.1.20\r\ns=Studio A Main\r\nc=IN IP4 239.69.1.10/32\r\nt=0 0\r\nm=audio 5004 RTP/AVP 98\r\na=rtpmap:98 L24/48000/8\r\na=ptime:1\r\n";
+        let c = parse_sdp(sdp).unwrap();
+        assert_eq!((c.name.as_str(), c.group.as_str(), c.port, c.encoding.as_str(), c.rate, c.channels), ("Studio A Main", "239.69.1.10", 5004, "L24", 48_000, 8));
+        let mut sap = vec![0x20, 0, 0x12, 0x34, 192, 168, 1, 20];
+        sap.extend_from_slice(b"application/sdp\0");
+        sap.extend_from_slice(sdp.as_bytes());
+        assert_eq!(sap_sdp(&sap).and_then(|t| parse_sdp(&t)), Some(c));
+    }
+
+    #[test]
+    fn l24_channel_pick() {
+        // 2 frames of 4 channels, L24: pick channels 2 and 3
+        let mut p = Vec::new();
+        for f in 0..2i32 {
+            for ch in 0..4i32 {
+                let v = (f * 4 + ch) * 100_000;
+                p.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+            }
+        }
+        let mut out = Vec::new();
+        assert_eq!(aes67_samples(&p, 3, 4, 2, 3, 1.0, &mut out), 2);
+        let s = 8_388_608.0;
+        assert_eq!(out, vec![200_000.0 / s, 300_000.0 / s, 600_000.0 / s, 700_000.0 / s]);
+    }
+}

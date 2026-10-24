@@ -21,6 +21,14 @@ These programs were part of the RadioMoon repository up to version 0.5.30.
 
 Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is required for the composite output.
 
+## AES67 / Dante input
+
+Audio source > **AES67 / Dante** receives an AES67 stream: RTP L24 or L16, 44.1 / 48 / 96 kHz, multicast (or unicast), any number of channels with a free choice of the left and right channel. Announced streams (SAP on 239.255.255.255 and 224.2.127.254, port 9875) appear in the list *Announced streams*; otherwise enter the multicast address, port, format and channels by hand. The Transmitter follows the stream's own rate, so it does not need the PTP clock of the AES67 network.
+
+**Dante:** Dante's own protocol is closed (Audinate). Use one of:
+- **AES67 mode** of the Dante device: Dante Controller > Device Config > AES67 Config > enable, set the multicast prefix, then create a multicast transmit flow with the channels; the flow appears in the list.
+- **Dante Virtual Soundcard** (or Dante Via) on the Transmitter computer: it is a sound card, so choose *Sound input*.
+
 ## MPX input
 
 The Transmitter can also send a ready composite signal: Audio source > **MPX input (192 kHz)**. Choose a sound card input that records at 192 kHz and the channel (left or right) that carries the MPX, e.g. from the MPX output of a broadcast processor. PCM and FLAC outputs send the signal as it is (an exact copy). Compact MPX outputs decode it first - stereo audio, pilot and RDS levels, RDS station name, RadioText, PI, PTY and flags - and the receiver rebuilds the composite from that (other RDS services such as clock time or AF lists are not carried). The Signal and RDS settings are not used with an MPX input.

@@ -496,17 +496,22 @@ pub struct MpxHandle {
 impl MpxHandle {
     /// `rx` delivers the on-air mix: interleaved stereo at 44.1 kHz.
     pub fn start(cfg: &MpxCfg, rx: Receiver<Vec<f32>>) -> MpxHandle {
-        Self::start_with(cfg, rx, false)
+        Self::start_with(cfg, rx, false, 44_100)
+    }
+
+    /// Like `start`, with stereo audio at another sample rate (e.g. 48 kHz from AES67).
+    pub fn start_rate(cfg: &MpxCfg, rx: Receiver<Vec<f32>>, in_rate: u32) -> MpxHandle {
+        Self::start_with(cfg, rx, false, in_rate)
     }
 
     /// `rx` delivers a ready composite signal (MPX) at 192 kHz, e.g. from a sound card input: it is sent to the
     /// outputs as it is (no generator, so the Signal and RDS settings are not used). For Compact MPX outputs it is
     /// decoded first (stereo audio, pilot and RDS levels, RDS data), and the receiver rebuilds the composite.
     pub fn start_input(cfg: &MpxCfg, rx: Receiver<Vec<f32>>) -> MpxHandle {
-        Self::start_with(cfg, rx, true)
+        Self::start_with(cfg, rx, true, 44_100)
     }
 
-    fn start_with(cfg: &MpxCfg, rx: Receiver<Vec<f32>>, passthrough: bool) -> MpxHandle {
+    fn start_with(cfg: &MpxCfg, rx: Receiver<Vec<f32>>, passthrough: bool, in_rate: u32) -> MpxHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let peak = Arc::new(AtomicU32::new(0));
         let status: Text = Arc::new(Mutex::new("Starting...".into()));
@@ -549,7 +554,6 @@ impl MpxHandle {
         let (st, pk, pa, stt, tl) = (stop.clone(), peak.clone(), params.clone(), status.clone(), timeline.clone());
         let ps_cfg = Arc::new(Mutex::new((cfg.ps.clone(), cfg.ps_mode.clone(), cfg.ps_interval)));
         let ps_cfg2 = ps_cfg.clone();
-        let in_rate = 44_100;
         std::thread::spawn(move || {
             let (p0, r0) = pa.lock().map(|g| g.clone()).unwrap_or_default();
             let mut enc = MpxEncoder::new(in_rate, FS, p0, r0);
