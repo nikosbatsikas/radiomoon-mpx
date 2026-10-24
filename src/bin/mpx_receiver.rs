@@ -5,7 +5,7 @@
 
 use eframe::egui::{self, RichText};
 use radiomoon_mpx::host::Host;
-use radiomoon_mpx::look::{self, card, pill, tile};
+use radiomoon_mpx::look::{self, card, pill, Tile};
 use radiomoon_mpx::mpxrx::{RxCfg, RxHandle, RxView};
 use radiomoon_mpx::mpxscope::{self, Scope};
 use radiomoon_mpx::service;
@@ -216,23 +216,26 @@ impl App {
                 return;
             };
             let v = &l.v;
-            ui.horizontal_wrapped(|ui| {
-                tile(ui, "Bandwidth", &look::mbps(v.mbps), "Mbit/s", look::ACCENT, 120.0);
-                let bits = if v.stats.bits == 0 { 24 } else { v.stats.bits };
-                let (fmt, sub) = match v.stats.compact {
-                    _ if !v.receiving => ("-".to_string(), String::new()),
-                    1 => ("Compact".to_string(), "FLAC audio".to_string()),
-                    2 => ("Compact".to_string(), "Opus audio".to_string()),
-                    _ if v.flac => ("FLAC".to_string(), format!("{bits}-bit, 192 kHz")),
-                    _ => (format!("L{bits}"), "192 kHz".to_string()),
-                };
-                tile(ui, "Format", &fmt, &sub, look::TEXT, 130.0);
-                let low = v.buffer_ms < self.s.buffer_ms / 3;
-                tile(ui, "Buffer", &format!("{}", v.buffer_ms), "ms", if v.receiving && low { look::WARN } else { look::TEXT }, 90.0);
-                let lost = v.stats.lost + v.stats.bad;
-                tile(ui, "Lost packets", &format!("{lost}"), &format!("{:.0} ms hidden", v.stats.concealed as f64 / 192.0), if lost > 0 { look::WARN } else { look::GOOD }, 140.0);
-                tile(ui, "Received", &format!("{:.1}", v.total_mb), "MB", look::TEXT, 100.0);
-            });
+            let bits = if v.stats.bits == 0 { 24 } else { v.stats.bits };
+            let (fmt, sub) = match v.stats.compact {
+                _ if !v.receiving => ("-".to_string(), String::new()),
+                1 => ("Compact".to_string(), "FLAC".to_string()),
+                2 => ("Compact".to_string(), "Opus".to_string()),
+                _ if v.flac => ("FLAC".to_string(), format!("{bits}-bit")),
+                _ => (format!("L{bits}"), "192 kHz".to_string()),
+            };
+            let low = v.buffer_ms < self.s.buffer_ms / 3;
+            let lost = v.stats.lost + v.stats.bad;
+            look::tiles(
+                ui,
+                &[
+                    Tile::new("Bandwidth", look::mbps(v.mbps), "Mbit/s", look::ACCENT),
+                    Tile::new("Format", fmt, sub, look::TEXT),
+                    Tile::new("Buffer", format!("{}", v.buffer_ms), "ms", if v.receiving && low { look::WARN } else { look::TEXT }),
+                    Tile::new("Lost packets", format!("{lost}"), format!("{:.0} ms hidden", v.stats.concealed as f64 / 192.0), if lost > 0 { look::WARN } else { look::GOOD }),
+                    Tile::new("Received", format!("{:.1}", v.total_mb), "MB", look::TEXT),
+                ],
+            );
             ui.add_space(2.0);
             look::sparkline(ui, &v.hist, 52.0, look::ACCENT);
             ui.add_space(2.0);

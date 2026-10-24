@@ -112,21 +112,50 @@ pub fn inset<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::none().fill(INSET).rounding(5.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(7.0).show(ui, add).inner
 }
 
-/// A value tile: small caption, large number, unit.
-pub fn tile(ui: &mut Ui, caption: &str, value: &str, unit: &str, color: Color32, width: f32) {
-    egui::Frame::none().fill(INSET).rounding(5.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::symmetric(8.0, 5.0)).show(ui, |ui| {
-        ui.set_width(width * 0.8);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(caption).small().color(DIM));
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(value).size(16.0).strong().color(color));
-                if !unit.is_empty() {
-                    ui.label(RichText::new(unit).color(DIM));
-                }
-            });
+/// One value tile: small caption, large number, unit.
+pub struct Tile<'a> {
+    pub caption: &'a str,
+    pub value: String,
+    pub unit: String,
+    pub color: Color32,
+}
+
+impl<'a> Tile<'a> {
+    pub fn new(caption: &'a str, value: impl Into<String>, unit: impl Into<String>, color: Color32) -> Self {
+        Tile { caption, value: value.into(), unit: unit.into(), color }
+    }
+}
+
+/// A row of value tiles that always fits the available width: the tiles share the width equally and move to
+/// more rows on a narrow window (framed boxes are never wider than the space they get).
+pub fn tiles(ui: &mut Ui, list: &[Tile]) {
+    const MIN: f32 = 104.0;
+    let gap = 6.0;
+    let avail = ui.available_width().max(MIN);
+    let per_row = (((avail + gap) / (MIN + gap)).floor() as usize).clamp(1, list.len().max(1));
+    for row in list.chunks(per_row) {
+        let outer = ((avail - gap * (per_row as f32 - 1.0)) / per_row as f32).floor();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for t in row {
+                egui::Frame::none().fill(INSET).rounding(5.0).stroke(Stroke::new(1.0_f32, BORDER)).inner_margin(egui::Margin::symmetric(8.0, 5.0)).show(ui, |ui| {
+                    let inner = (outer - 18.0).max(40.0);
+                    ui.set_width(inner);
+                    ui.set_max_width(inner);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.add(egui::Label::new(RichText::new(t.caption).small().color(DIM)).truncate());
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(&t.value).size(16.0).strong().color(t.color)).truncate());
+                            if !t.unit.is_empty() {
+                                ui.add(egui::Label::new(RichText::new(&t.unit).color(DIM)).truncate());
+                            }
+                        });
+                    });
+                });
+            }
         });
-    });
+    }
 }
 
 /// A coloured rounded label such as "ON AIR".

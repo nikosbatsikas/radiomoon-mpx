@@ -476,6 +476,16 @@ pub struct MpxHandle {
 impl MpxHandle {
     /// `rx` delivers the on-air mix: interleaved stereo at 44.1 kHz.
     pub fn start(cfg: &MpxCfg, rx: Receiver<Vec<f32>>) -> MpxHandle {
+        Self::start_with(cfg, rx, false)
+    }
+
+    /// `rx` delivers a ready composite signal (MPX) at 192 kHz, e.g. from a sound card input: it is sent to the
+    /// outputs as it is (no generator, so the Signal and RDS settings are not used; Compact MPX is not possible).
+    pub fn start_input(cfg: &MpxCfg, rx: Receiver<Vec<f32>>) -> MpxHandle {
+        Self::start_with(cfg, rx, true)
+    }
+
+    fn start_with(cfg: &MpxCfg, rx: Receiver<Vec<f32>>, passthrough: bool) -> MpxHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let peak = Arc::new(AtomicU32::new(0));
         let status: Text = Arc::new(Mutex::new("Starting...".into()));
@@ -492,7 +502,10 @@ impl MpxHandle {
         if cfg.ip_on {
             for t in cfg.targets.iter().filter(|t| t.enabled && !t.host.trim().is_empty()) {
                 let link: Link = Arc::new(Mutex::new(LinkStat { text: "Starting...".into(), ..LinkStat::default() }));
-                if t.is_compact() {
+                if t.is_compact() && passthrough {
+                    // Compact MPX carries the audio, which a ready composite signal does not give
+                    link_set(&link, |l| l.text = "Compact MPX is not possible with an MPX input: choose PCM or FLAC".into());
+                } else if t.is_compact() {
                     // Compact MPX: gets the processed stereo audio (interleaved, 192 kHz) instead of the composite
                     let q = Queue::new(120);
                     compact_thread(t.clone(), q.clone(), params.clone(), stop.clone(), link.clone());
@@ -524,6 +537,21 @@ impl MpxHandle {
             // wait for the first audio, then keep going until stopped
             while !st.load(Ordering::Relaxed) {
                 match rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(chunk) if passthrough => {
+                        out.clear();
+                        out.extend(chunk.iter().map(|v| v.clamp(-1.0, 1.0)));
+                        an.push(&out, &scope2);
+                        for q in &queues {
+                            q.push(&out);
+                        }
+                        let p = out.iter().fold(0f32, |m, v| m.max(v.abs()));
+                        let old = f32::from_bits(pk.load(Ordering::Relaxed));
+                        pk.store(p.max(old * 0.9).to_bits(), Ordering::Relaxed);
+                        if secs_at.elapsed() > Duration::from_secs(1) {
+                            secs_at = Instant::now();
+                            set(&stt, "Running (MPX input)");
+                        }
+                    }
                     Ok(chunk) => {
                         if let Ok(g) = pa.lock() {
                             enc.set_params(g.0.clone());

@@ -2,6 +2,10 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.6.0
+- **MPX input (Transmitter):** a new audio source, "MPX input (192 kHz)": a ready FM composite signal (e.g. the MPX output of a processor or stereo encoder) is recorded from a sound card input at 192 kHz (left or right channel, with a level control) and sent as it is to the IP receivers (PCM L16/L20/L24 or FLAC) and the 192 kHz sound card output. The analyzer and deviation meter show it; the Receiver also decodes its RDS. Compact MPX is not possible with an MPX input (it carries audio, not a composite); such an output says so.
+- **Fix:** the value tiles (Bandwidth, Format, Buffer ... in the Receiver; Deviation, IP bandwidth ... in the Transmitter) could make the window content wider than the window, which cut off the right side. The tiles now always fit and wrap into more rows on a narrow window.
+
 ## 1.5.0
 - **RDS fix (Transmitter):** block D of every RDS group was sent with the wrong offset word (C' instead of D). FM radios could read the PI code and programme type, but not the station name (PS) or the RadioText. Both now appear on radios. (The same error was in the MPX generator of RadioMoon up to 0.5.30.)
 - **RDS display (Receiver):** a new RDS panel decodes the RDS of the received MPX, whatever the format: station name as on a radio display, RadioText, PI code, programme type (number and name), TP / TA / music, and the share of correct blocks. Works with and without the stereo pilot.
