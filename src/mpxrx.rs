@@ -18,8 +18,23 @@ pub struct RxCfg {
     pub buffer_ms: u32,
 }
 
+/// Serialisation of the packet statistics (kept free of serde in mpxflac.rs).
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(remote = "RxStats")]
+struct RxStatsDef {
+    packets: u64,
+    lost: u64,
+    recovered: u64,
+    concealed: u64,
+    bad: u64,
+    late: u64,
+    flac: bool,
+    bits: u32,
+}
+
 /// Live numbers of the receiver (read by the window).
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RxView {
     /// Data arrived in the last half second.
     pub receiving: bool,
@@ -32,6 +47,7 @@ pub struct RxView {
     pub total_mb: f64,
     /// Audio waiting in the buffer, ms.
     pub buffer_ms: u32,
+    #[serde(with = "RxStatsDef")]
     pub stats: RxStats,
     /// State of the sound card output.
     pub card: String,

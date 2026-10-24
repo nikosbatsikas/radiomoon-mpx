@@ -46,6 +46,17 @@ Protocols: UDP (RTP payload types: L24 = 97, FLAC = 98, L16 = 99, L20 = 100) or 
 
 A lost UDP packet is concealed by repeating the last 2 ms. That is a whole number of cycles of 19, 38 and 57 kHz, so pilot, stereo and RDS stay in phase (radios do not drop to mono or lose RDS) and the timing stays exact. The receiver status shows the format, the bitrate and the lost / concealed packets.
 
+## Service and system tray
+
+**Service & tray > Install as service** runs the program in the background from the start of the computer:
+
+- **Windows:** a Windows service (asks once for administrator rights). It starts before anyone logs in, keeps running after logoff and is restarted if it stops. Start / Stop in the window control the service (no administrator prompt needed).
+- **Linux:** a systemd user service (`~/.config/systemd/user/radiomoon-mpx-*.service`, with `loginctl enable-linger` so it starts at boot).
+
+The service uses the same settings file as the window. While it runs, the window shows its live status, bandwidth and analyzer. Transmitter level and RDS changes reach the service at once; for source and output changes use **Restart (apply settings)**.
+
+The **tray icon** (Windows and Linux desktops with a tray) is coloured while running and grey when stopped; its tooltip shows the state and bandwidth. Closing the window keeps the program in the tray; use **Exit** in the tray menu to end it.
+
 ## Settings
 
 `mpx-transmitter.json` and `mpx-receiver.json` are stored in ProgramData\RadioMoon (Windows) or ~/.local/share/RadioMoon (Linux/macOS), or next to the programs when a `portable.flag` file is there. Enable *Start ... when the program starts* for unattended use.

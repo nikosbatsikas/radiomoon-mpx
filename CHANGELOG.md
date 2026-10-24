@@ -2,6 +2,14 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.3.0
+- **Run as a service** (Windows and Linux): "Service & tray" > Install as service. On Windows it is a Windows service that starts with the computer, before anyone logs in, and keeps running after logoff (restarted automatically if it stops). On Linux it is a systemd user service. The service uses the settings of the window, and the window shows its live status, bandwidth and analyzer and starts / stops it. Level and RDS changes reach a running transmitter service at once; source and output changes with Restart.
+- **System tray icon** (Windows and Linux desktops): coloured while running, grey when stopped, with the state in the tooltip; menu Show / Exit. Closing the window keeps the program running in the tray (can be switched off).
+- Transmitter: the settings are in tabs (Audio source, IP outputs, Sound card, Signal, RDS, Service & tray), which makes the window much smaller.
+- Transmitter: the "Folder" audio source is removed; the sources are an internet stream (with the song titles as RadioText) and a sound input. A saved folder source changes to internet stream.
+- Receiver: Input and Output take one third of the width, the Link panel two thirds.
+- Receiver: the settings are kept in ProgramData on Windows (shared with the service); older settings in LocalAppData are taken over.
+
 ## 1.2.0
 - Smaller, more compact windows: smaller text, buttons, cards, graphs and analyzer, so more fits on the screen.
 - Each program has its own icon: a blue transmitter tower for the MPX Transmitter, a green receiving dish for the MPX Receiver (window, taskbar, .exe file, Start menu and macOS apps).
