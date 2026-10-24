@@ -4,6 +4,7 @@ use crate::mpx::push_hist;
 use crate::compact::{CompactRx, CompactTcp, TCP_COMPACT_MAGIC};
 use crate::mpxflac::{Depacketizer, RxStats, TcpDeframer};
 use crate::mpxio::{card_thread, get, set, track_peak, Queue, Text};
+use crate::rdsdec::RdsDecoder;
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{TcpListener, UdpSocket};
@@ -34,6 +35,30 @@ struct RxStatsDef {
     compact: u8,
 }
 
+/// RDS decoded from the received signal.
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RdsView {
+    pub synced: bool,
+    pub pi: Option<u16>,
+    pub ps: String,
+    pub rt: String,
+    pub pty: Option<u8>,
+    pub tp: bool,
+    pub ta: bool,
+    pub music: bool,
+    /// Share of correct blocks, 0..1.
+    pub quality: f32,
+    pub groups: u64,
+}
+
+impl RdsView {
+    fn from(d: &RdsDecoder, receiving: bool) -> RdsView {
+        let i = &d.info;
+        RdsView { synced: i.synced && receiving, pi: i.pi, ps: i.ps.clone(), rt: i.rt.clone(), pty: i.pty, tp: i.tp, ta: i.ta, music: i.music, quality: i.quality, groups: i.groups }
+    }
+}
+
 /// Live numbers of the receiver (read by the window).
 #[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -55,6 +80,8 @@ pub struct RxView {
     pub card: String,
     /// Bandwidth history (oldest first, 2 values per second).
     pub hist: VecDeque<f32>,
+    /// RDS decoded from the received MPX.
+    pub rds: RdsView,
 }
 
 pub struct RxHandle {
@@ -81,7 +108,7 @@ impl Meter {
         self.total += wire_bytes;
     }
     /// Returns true when the numbers were published.
-    fn tick(&mut self, view: &Mutex<RxView>, from: &str, st: &RxStats, q: &Queue, card: &Text) -> bool {
+    fn tick(&mut self, view: &Mutex<RxView>, from: &str, st: &RxStats, q: &Queue, card: &Text, rds: &RdsDecoder) -> bool {
         if self.at.elapsed() < Duration::from_millis(500) {
             return false;
         }
@@ -96,6 +123,7 @@ impl Meter {
             v.buffer_ms = q.ms();
             v.stats = *st;
             v.card = get(card);
+            v.rds = RdsView::from(rds, self.bytes > 0);
             push_hist(&mut v.hist, mbps);
         }
         self.bytes = 0;
@@ -181,6 +209,7 @@ impl RxHandle {
             let mut samples: Vec<f32> = Vec::with_capacity(8192);
             let mut an = crate::mpxscope::Analyzer::new();
             let mut meter = Meter::new();
+            let mut rds = RdsDecoder::new(192_000);
             if tcp {
                 let l = match TcpListener::bind(("0.0.0.0", port)) {
                     Ok(l) => l,
@@ -199,7 +228,7 @@ impl RxHandle {
                         match l.accept() {
                             Ok(x) => break x,
                             Err(_) => {
-                                meter.tick(&vw, "-", &RxStats::default(), &q, &card);
+                                meter.tick(&vw, "-", &RxStats::default(), &q, &card, &rds);
                                 std::thread::sleep(Duration::from_millis(100));
                             }
                         }
@@ -219,13 +248,14 @@ impl RxHandle {
                                 if !samples.is_empty() {
                                     track_peak(&samples, &pk);
                                     an.push(&samples, &scope2);
+                                    rds.push(&samples);
                                     q.push(&samples);
                                 }
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
                             Err(_) => break,
                         }
-                        if meter.tick(&vw, &who, &de.stats(), &q, &card) {
+                        if meter.tick(&vw, &who, &de.stats(), &q, &card, &rds) {
                             if let Ok(v) = vw.lock() {
                                 set(&stt, &status_line(&v));
                             }
@@ -259,11 +289,12 @@ impl RxHandle {
                             if !samples.is_empty() {
                                 track_peak(&samples, &pk);
                                 an.push(&samples, &scope2);
+                                    rds.push(&samples);
                                 q.push(&samples);
                             }
                         }
                     }
-                    if meter.tick(&vw, &from, if compact { &cx.stats } else { &de.stats }, &q, &card) {
+                    if meter.tick(&vw, &from, if compact { &cx.stats } else { &de.stats }, &q, &card, &rds) {
                         if let Ok(v) = vw.lock() {
                             if v.receiving {
                                 set(&stt, &status_line(&v));

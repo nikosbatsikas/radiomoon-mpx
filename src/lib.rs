@@ -10,6 +10,7 @@ pub mod mpxflac;
 pub mod mpxio;
 pub mod mpxrx;
 pub mod mpxscope;
+pub mod rdsdec;
 pub mod service;
 pub mod srcin;
 pub mod status;

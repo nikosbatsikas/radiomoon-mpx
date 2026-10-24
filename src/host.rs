@@ -100,8 +100,8 @@ impl Host {
         }
     }
 
-    /// The "Service and tray" settings. Returns true when `close_to_tray` was changed.
-    pub fn settings_ui(&mut self, ui: &mut egui::Ui, close_to_tray: &mut bool) -> bool {
+    /// The "Service and tray" settings. Returns true when `close_to_tray` or `fit` was changed.
+    pub fn settings_ui(&mut self, ui: &mut egui::Ui, close_to_tray: &mut bool, fit: &mut bool) -> bool {
         let mut ch = false;
         let s = self.state();
         let busy = self.busy.load(Ordering::Relaxed);
@@ -168,6 +168,9 @@ impl Host {
             } else {
                 ui.label(RichText::new("No system tray on this desktop.").color(look::DIM));
             }
+        });
+        card(ui, "Window", |ui| {
+            ch |= ui.checkbox(fit, "Fit the window height to its content").changed();
         });
         ch
     }

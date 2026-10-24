@@ -165,8 +165,10 @@ impl RdsEncoder {
     fn refill(&mut self) {
         let g = self.group();
         self.bits.clear();
-        for (i, w) in g.iter().enumerate() {
-            let blk = block(*w, OFFSETS[i]);
+        // offset words of blocks A, B, C and D (C' is only for version B groups, which are not sent)
+        let offs = [OFFSETS[0], OFFSETS[1], OFFSETS[2], OFFSETS[4]];
+        for (w, off) in g.iter().zip(offs) {
+            let blk = block(*w, off);
             for k in (0..26).rev() {
                 self.bits.push(((blk >> k) & 1) as u8);
             }
