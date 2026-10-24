@@ -217,8 +217,14 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 tile(ui, "Bandwidth", &look::mbps(v.mbps), "Mbit/s", look::ACCENT, 120.0);
                 let bits = if v.stats.bits == 0 { 24 } else { v.stats.bits };
-                let fmt = if !v.receiving { "-".to_string() } else if v.flac { "FLAC".to_string() } else { format!("L{bits}") };
-                tile(ui, "Format", &fmt, &if v.receiving { format!("{bits}-bit, 192 kHz") } else { String::new() }, look::TEXT, 130.0);
+                let (fmt, sub) = match v.stats.compact {
+                    _ if !v.receiving => ("-".to_string(), String::new()),
+                    1 => ("Compact".to_string(), "FLAC audio".to_string()),
+                    2 => ("Compact".to_string(), "Opus audio".to_string()),
+                    _ if v.flac => ("FLAC".to_string(), format!("{bits}-bit, 192 kHz")),
+                    _ => (format!("L{bits}"), "192 kHz".to_string()),
+                };
+                tile(ui, "Format", &fmt, &sub, look::TEXT, 130.0);
                 let low = v.buffer_ms < self.s.buffer_ms / 3;
                 tile(ui, "Buffer", &format!("{}", v.buffer_ms), "ms", if v.receiving && low { look::WARN } else { look::TEXT }, 90.0);
                 let lost = v.stats.lost + v.stats.bad;
@@ -252,7 +258,7 @@ impl App {
                 ch |= ui.add(egui::DragValue::new(&mut self.s.port).range(1..=65535)).changed();
                 ui.end_row();
             });
-            ui.label(RichText::new("Format detected automatically (L16/L20/L24, FLAC).").small().color(look::DIM));
+            ui.label(RichText::new("Format detected automatically (L16/L20/L24, FLAC, Compact MPX).").small().color(look::DIM));
         });
         card(ui, "Output", |ui| {
             cap(ui, "Sound device (192 kHz)");
@@ -311,7 +317,7 @@ impl eframe::App for App {
                 tagline: "Receives the MPX over IP and plays it into the exciter",
                 features: &[
                     "UDP (RTP) or TCP, format detected automatically",
-                    "L16 / L20 / L24 and FLAC lossless 16 / 20 / 24-bit",
+                    "L16 / L20 / L24, FLAC 16 / 20 / 24-bit and Compact MPX (FLAC / Opus)",
                     "Lost packets hidden without a pilot or RDS phase jump",
                     "Live bandwidth, buffer and loss readouts with history",
                     "Runs as a Windows / Linux service, system tray icon",

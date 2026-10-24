@@ -1,6 +1,7 @@
 //! MPX output: runs the generator (mpxdsp) on the on-air audio and sends the composite signal to a
 //! 192 kHz sound card and/or over IP: uncompressed 24-bit (RTP L24 over UDP, raw L24 over TCP) or lossless FLAC
 //! (one FLAC frame per RTP packet, or length-prefixed frames over TCP).
+use crate::compact;
 use crate::model::{IpTarget, MpxCfg};
 use crate::mpxdsp::{MpxEncoder, MpxParams, RdsData};
 use crate::mpxflac::{encode_frame_bits, pack_pcm, Quantizer, BLOCK, PT_FLAC, PT_L16, PT_L20, PT_L24, TCP_FLAC_MAGIC, TCP_PCM_MAGIC};
@@ -268,6 +269,180 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link) {
     });
 }
 
+// ---------------------------------------------------------------- Compact MPX sender (one thread per target)
+
+/// Sends the processed stereo audio of the generator as Compact MPX (FLAC or Opus + levels + RDS), see compact.rs.
+/// `q` holds interleaved stereo at 192 kHz; the RTP timestamps count 192 kHz samples like the other formats.
+fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsData)>>, stop: Arc<AtomicBool>, link: Link) {
+    std::thread::spawn(move || {
+        let addr = t.address();
+        let tcp = t.proto == "tcp";
+        let codec = if t.codec == "copus" { compact::Codec::Opus } else { compact::Codec::Flac };
+        let mut enc = match compact::Encoder::new(codec, t.opus_kbps) {
+            Ok(e) => e,
+            Err(e) => {
+                link_set(&link, |l| l.text = format!("Codec error: {e}"));
+                return;
+            }
+        };
+        // whole packets: 20 ms (Opus) or 6.7 ms (FLAC) of audio, i.e. this many 192 kHz frames
+        let pkt = codec.frame_192();
+        let mut udp: Option<UdpSocket> = None;
+        let mut tcps: Option<TcpStream> = None;
+        let (mut seq, mut ts) = (0u16, 0u32);
+        let ssrc: u32 = 0x524D_4D43 ^ (std::process::id() << 8) ^ ((t.port as u32) << 16);
+        let mut credit = 0.0f64;
+        let mut last = Instant::now();
+        let mut samples = Vec::with_capacity(pkt * 2);
+        let mut packets: Vec<Vec<u8>> = Vec::new();
+        let mut payload = Vec::with_capacity(2048);
+        let (mut sent, mut raw, mut total): (u64, u64, u64) = (0, 0, 0);
+        let mut last_status = Instant::now();
+        let mut qos_note = String::new();
+        let qos = if t.dscp == 0 { String::new() } else { format!(", QoS {}", t.dscp_name()) };
+        while !stop.load(Ordering::Relaxed) {
+            if tcp && tcps.is_none() {
+                link_set(&link, |l| {
+                    l.ok = false;
+                    l.text = format!("Connecting to {addr} ...");
+                });
+                let conn = addr
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "address not found"))
+                    .and_then(|a| TcpStream::connect_timeout(&a, Duration::from_secs(4)));
+                match conn {
+                    Ok(mut s) => {
+                        let _ = s.set_nodelay(true);
+                        let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
+                        qos_note = set_dscp(socket2::SockRef::from(&s), t.dscp);
+                        if s.write_all(compact::TCP_COMPACT_MAGIC).is_err() {
+                            std::thread::sleep(Duration::from_secs(1));
+                            continue;
+                        }
+                        tcps = Some(s);
+                        link_set(&link, |l| {
+                            l.ok = true;
+                            l.text = "Connected".into();
+                        });
+                        last = Instant::now();
+                        credit = 0.0;
+                    }
+                    Err(e) => {
+                        link_set(&link, |l| {
+                            l.ok = false;
+                            l.text = format!("Connection failed: {e}");
+                            l.mbps = 0.0;
+                            push_hist(&mut l.hist, 0.0);
+                        });
+                        for _ in 0..20 {
+                            if stop.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        continue;
+                    }
+                }
+            }
+            if !tcp && udp.is_none() {
+                match UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect(&addr).map(|_| s)) {
+                    Ok(s) => {
+                        qos_note = set_dscp(socket2::SockRef::from(&s), t.dscp);
+                        udp = Some(s);
+                        link_set(&link, |l| {
+                            l.ok = true;
+                            l.text = "Sending".into();
+                        });
+                    }
+                    Err(e) => {
+                        link_set(&link, |l| {
+                            l.ok = false;
+                            l.text = format!("{e}");
+                        });
+                        std::thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                }
+            }
+            let now = Instant::now();
+            let fill = q.len() as f64 / q.prefill.max(1) as f64;
+            let factor = 1.0 + (fill - 1.0).clamp(-1.0, 1.0) * 0.003;
+            credit += now.duration_since(last).as_secs_f64() * FS as f64 * factor;
+            last = now;
+            let mut idle = true;
+            while credit >= pkt as f64 && q.len() >= (pkt * 2).max(q.prefill.min(pkt * 8)) {
+                samples.clear();
+                if !q.pop_n(pkt * 2, &mut samples) {
+                    break;
+                }
+                credit -= pkt as f64;
+                idle = false;
+                raw += (pkt * 3) as u64 + pkt as u64 * (12 + UDP_IP_HEADERS) / PKT as u64;
+                let (pr, rd) = params.lock().map(|g| (g.0.clone(), g.1.clone())).unwrap_or_default();
+                enc.push(&samples, &pr, &rd, &mut packets);
+                for p in packets.drain(..) {
+                    payload.clear();
+                    if tcp {
+                        payload.extend_from_slice(&(p.len() as u16).to_be_bytes());
+                    } else {
+                        rtp_header(&mut payload, compact::PT_COMPACT, seq, ts, ssrc);
+                        seq = seq.wrapping_add(1);
+                        ts = ts.wrapping_add(pkt as u32);
+                    }
+                    payload.extend_from_slice(&p);
+                    let wire = payload.len() as u64 + if tcp { TCP_IP_HEADERS } else { UDP_IP_HEADERS };
+                    sent += wire;
+                    total += wire;
+                    if let Some(s) = &udp {
+                        let _ = s.send(&payload);
+                    } else if let Some(s) = tcps.as_mut() {
+                        if let Err(e) = s.write_all(&payload) {
+                            tcps = None;
+                            link_set(&link, |l| {
+                                l.ok = false;
+                                l.text = format!("Disconnected: {e}");
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+            if credit > (pkt * 20) as f64 {
+                credit = 0.0;
+            }
+            if last_status.elapsed() >= Duration::from_millis(500) {
+                let secs = last_status.elapsed().as_secs_f64();
+                last_status = Instant::now();
+                let mbps = (sent as f64 * 8.0 / secs / 1e6) as f32;
+                let l24 = (raw as f64 * 8.0 / secs / 1e6) as f32;
+                let drops = q.drops.load(Ordering::Relaxed);
+                link_set(&link, |l| {
+                    l.mbps = mbps;
+                    l.l24_mbps = l24;
+                    l.total_mb = total as f64 / 1e6;
+                    push_hist(&mut l.hist, mbps);
+                    if l.ok {
+                        let state = if tcp { "Connected" } else { "Sending" };
+                        l.text = if drops == 0 { format!("{state}{qos}{qos_note}") } else { format!("{state}{qos}{qos_note} (buffer overflows: {drops})") };
+                    }
+                });
+                sent = 0;
+                raw = 0;
+            }
+            if idle {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        link_set(&link, |l| {
+            l.ok = false;
+            l.mbps = 0.0;
+            l.text = "Stopped".into();
+        });
+    });
+}
+
 // ---------------------------------------------------------------- generator
 
 pub fn params_of(c: &MpxCfg) -> MpxParams {
@@ -308,6 +483,7 @@ impl MpxHandle {
         let mut links: Vec<(IpTarget, Link)> = Vec::new();
         let params = Arc::new(Mutex::new((params_of(cfg), rds_of(cfg, ""))));
         let mut queues: Vec<Arc<Queue>> = Vec::new();
+        let mut cqueues: Vec<Arc<Queue>> = Vec::new();
         if cfg.card_on {
             let q = Queue::new(120);
             card_thread(cfg.card_device.clone(), q.clone(), stop.clone(), card.clone(), "Sound card");
@@ -315,14 +491,21 @@ impl MpxHandle {
         }
         if cfg.ip_on {
             for t in cfg.targets.iter().filter(|t| t.enabled && !t.host.trim().is_empty()) {
-                let q = Queue::new(60);
                 let link: Link = Arc::new(Mutex::new(LinkStat { text: "Starting...".into(), ..LinkStat::default() }));
-                ip_thread(t.clone(), q.clone(), stop.clone(), link.clone());
+                if t.is_compact() {
+                    // Compact MPX: gets the processed stereo audio (interleaved, 192 kHz) instead of the composite
+                    let q = Queue::new(120);
+                    compact_thread(t.clone(), q.clone(), params.clone(), stop.clone(), link.clone());
+                    cqueues.push(q);
+                } else {
+                    let q = Queue::new(60);
+                    ip_thread(t.clone(), q.clone(), stop.clone(), link.clone());
+                    queues.push(q);
+                }
                 links.push((t.clone(), link));
-                queues.push(q);
             }
         }
-        if queues.is_empty() {
+        if queues.is_empty() && cqueues.is_empty() {
             set(&status, "No output selected (sound card or IP)");
         }
         let scope = crate::mpxscope::new_scope();
@@ -332,6 +515,9 @@ impl MpxHandle {
         std::thread::spawn(move || {
             let (p0, r0) = pa.lock().map(|g| g.clone()).unwrap_or_default();
             let mut enc = MpxEncoder::new(in_rate, FS, p0, r0);
+            if !cqueues.is_empty() {
+                enc.tap = Some(Vec::new());
+            }
             let mut out: Vec<f32> = Vec::new();
             let mut an = crate::mpxscope::Analyzer::new();
             let mut secs_at = Instant::now();
@@ -341,13 +527,19 @@ impl MpxHandle {
                     Ok(chunk) => {
                         if let Ok(g) = pa.lock() {
                             enc.set_params(g.0.clone());
-                            enc.rds.data = g.1.clone();
+                            enc.set_rds(g.1.clone());
                         }
                         out.clear();
                         enc.process(&chunk, &mut out);
                         an.push(&out, &scope2);
                         for q in &queues {
                             q.push(&out);
+                        }
+                        if let Some(tap) = enc.tap.as_mut() {
+                            for q in &cqueues {
+                                q.push(tap);
+                            }
+                            tap.clear();
                         }
                         let p = enc.take_peak();
                         pk.store(p.to_bits(), Ordering::Relaxed);

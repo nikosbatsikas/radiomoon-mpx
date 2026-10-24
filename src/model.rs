@@ -104,17 +104,20 @@ pub struct IpTarget {
     pub port: u16,
     /// "udp" (RTP) | "tcp"
     pub proto: String,
-    /// "l24" = uncompressed PCM | "flac" = lossless FLAC
+    /// The composite: "l24" = uncompressed PCM, "flac" = lossless FLAC.
+    /// Compact MPX (the audio, rebuilt into the composite by the receiver): "cflac" = FLAC, "copus" = Opus.
     pub codec: String,
     /// Bits per sample: 24 (full quality), 20 or 16 (less bandwidth). The sample rate is always 192 kHz.
     pub bits: u32,
     /// QoS: DSCP value written into every IP packet (0 = not marked, 46 = EF, 34 = AF41).
     pub dscp: u8,
+    /// Opus bit rate of Compact MPX, kbit/s.
+    pub opus_kbps: u32,
 }
 
 impl Default for IpTarget {
     fn default() -> Self {
-        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46 }
+        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46, opus_kbps: 256 }
     }
 }
 
@@ -140,9 +143,17 @@ impl IpTarget {
     pub fn dscp_name(&self) -> String {
         dscp_name(self.dscp)
     }
+    /// Compact MPX (audio + levels + RDS) instead of the composite waveform.
+    pub fn is_compact(&self) -> bool {
+        self.codec == "cflac" || self.codec == "copus"
+    }
     pub fn kind(&self) -> String {
         let p = if self.proto == "tcp" { "TCP" } else { "UDP" };
-        if self.codec == "flac" {
+        if self.codec == "copus" {
+            format!("{p} · Compact Opus {}", self.opus_kbps)
+        } else if self.codec == "cflac" {
+            format!("{p} · Compact FLAC")
+        } else if self.codec == "flac" {
             format!("{p} · FLAC {}-bit", self.bits())
         } else {
             format!("{p} · L{}", self.bits())

@@ -352,69 +352,169 @@ pub fn encode_frame(samples: &[i32], frame_no: u32) -> Vec<u8> {
 
 /// Same as `encode_frame` for 16-, 20- or 24-bit samples (the samples are in the range of that bit depth).
 pub fn encode_frame_bits(samples: &[i32], frame_no: u32, bits: u32) -> Vec<u8> {
-    let bps = match bits {
+    let bps = norm_bits(bits);
+    let x = clamp_to(samples, bps);
+    let plan = plan_subframe(&x, bps);
+    let mut w = BitWriter::new(samples.len() * 3 + 32);
+    write_header(&mut w, samples.len(), frame_no, 0b0011, 0b0000, bps);
+    write_subframe(&mut w, &x, bps, &plan);
+    finish(w)
+}
+
+/// Encodes a stereo block (same length in both channels) as one FLAC frame. The channel coding (left/right,
+/// left/side, side/right or mid/side) with the fewest bits is used. `rate` is the sample rate in Hz.
+pub fn encode_frame_stereo(l: &[i32], r: &[i32], frame_no: u32, bits: u32, rate: u32) -> Vec<u8> {
+    let bps = norm_bits(bits);
+    let n = l.len().min(r.len());
+    let (xl, xr) = (clamp_to(&l[..n], bps), clamp_to(&r[..n], bps));
+    let side: Vec<i64> = xl.iter().zip(&xr).map(|(a, b)| a - b).collect();
+    let mid: Vec<i64> = xl.iter().zip(&xr).map(|(a, b)| (a + b) >> 1).collect();
+    let (pl, pr, ps, pm) = (plan_subframe(&xl, bps), plan_subframe(&xr, bps), plan_subframe(&side, bps + 1), plan_subframe(&mid, bps));
+    let options = [
+        (pl.bits + pr.bits, 0b0001u64),
+        (pl.bits + ps.bits, 0b1000),
+        (ps.bits + pr.bits, 0b1001),
+        (pm.bits + ps.bits, 0b1010),
+    ];
+    let code = options.iter().min_by_key(|o| o.0).map(|o| o.1).unwrap_or(0b0001);
+    let mut w = BitWriter::new(n * 6 + 48);
+    write_header(&mut w, n, frame_no, rate_code(rate), code, bps);
+    match code {
+        0b1000 => {
+            write_subframe(&mut w, &xl, bps, &pl);
+            write_subframe(&mut w, &side, bps + 1, &ps);
+        }
+        0b1001 => {
+            write_subframe(&mut w, &side, bps + 1, &ps);
+            write_subframe(&mut w, &xr, bps, &pr);
+        }
+        0b1010 => {
+            write_subframe(&mut w, &mid, bps, &pm);
+            write_subframe(&mut w, &side, bps + 1, &ps);
+        }
+        _ => {
+            write_subframe(&mut w, &xl, bps, &pl);
+            write_subframe(&mut w, &xr, bps, &pr);
+        }
+    }
+    finish(w)
+}
+
+fn norm_bits(bits: u32) -> u32 {
+    match bits {
         16 | 20 => bits,
         _ => BPS,
-    };
-    let (lo, hi) = (-(1i64 << (bps - 1)), (1i64 << (bps - 1)) - 1);
-    let n = samples.len();
-    let x: Vec<i64> = samples.iter().map(|&s| (s as i64).clamp(lo, hi)).collect();
+    }
+}
 
-    // choose the smallest subframe
-    let verbatim_bits = n as u64 * bps as u64;
-    let mut best: (u64, Sub, Vec<i64>, u32, Vec<u32>) = (verbatim_bits, Sub::Verbatim, Vec::new(), 0, Vec::new());
+fn clamp_to(samples: &[i32], bps: u32) -> Vec<i64> {
+    let (lo, hi) = (-(1i64 << (bps - 1)), (1i64 << (bps - 1)) - 1);
+    samples.iter().map(|&s| (s as i64).clamp(lo, hi)).collect()
+}
+
+/// FLAC frame header code of a sample rate (0 = "from the stream header").
+fn rate_code(rate: u32) -> u64 {
+    match rate {
+        88_200 => 0b0001,
+        176_400 => 0b0010,
+        192_000 => 0b0011,
+        8_000 => 0b0100,
+        16_000 => 0b0101,
+        22_050 => 0b0110,
+        24_000 => 0b0111,
+        32_000 => 0b1000,
+        44_100 => 0b1001,
+        48_000 => 0b1010,
+        96_000 => 0b1011,
+        _ => 0b0000,
+    }
+}
+
+/// Sample rate of a FLAC frame header code (0 when the code refers to the stream header).
+pub fn rate_of_code(code: u32) -> u32 {
+    match code {
+        0b0001 => 88_200,
+        0b0010 => 176_400,
+        0b0011 => 192_000,
+        0b0100 => 8_000,
+        0b0101 => 16_000,
+        0b0110 => 22_050,
+        0b0111 => 24_000,
+        0b1000 => 32_000,
+        0b1001 => 44_100,
+        0b1010 => 48_000,
+        0b1011 => 96_000,
+        _ => 0,
+    }
+}
+
+/// The cheapest way to code one channel: its size in bits and what to write.
+struct Plan {
+    bits: u64,
+    sub: Sub,
+    res: Vec<i64>,
+    po: u32,
+    params: Vec<u32>,
+}
+
+fn plan_subframe(x: &[i64], bps: u32) -> Plan {
+    let n = x.len();
+    let header = 8u64;
+    let mut best = Plan { bits: header + n as u64 * bps as u64, sub: Sub::Verbatim, res: Vec::new(), po: 0, params: Vec::new() };
     if n > 0 && x.iter().all(|&v| v == x[0]) {
-        best = (bps as u64, Sub::Constant, Vec::new(), 0, Vec::new());
-    } else {
-        for order in 0..=4usize.min(n.saturating_sub(1)) {
-            let res = fixed_residual(&x, order);
-            let (bits, po, params) = plan_residual(&res, order);
-            let total = bits.saturating_add(order as u64 * bps as u64);
-            if total < best.0 {
-                best = (total, Sub::Fixed(order), res, po, params);
-            }
+        return Plan { bits: header + bps as u64, sub: Sub::Constant, res: Vec::new(), po: 0, params: Vec::new() };
+    }
+    for order in 0..=4usize.min(n.saturating_sub(1)) {
+        let res = fixed_residual(x, order);
+        let (bits, po, params) = plan_residual(&res, order);
+        let total = bits.saturating_add(header + order as u64 * bps as u64);
+        if total < best.bits {
+            best = Plan { bits: total, sub: Sub::Fixed(order), res, po, params };
         }
-        if n > MAX_LPC * 2 {
-            let sets = lpc_sets(&x, MAX_LPC);
-            for &order in &[2usize, 4, 8, 12, 16, 20, 24, 32] {
-                let Some(lp) = sets.get(order - 1) else { continue };
-                let Some((q, shift)) = quantize(lp, QLP_PRECISION) else { continue };
-                let res = lpc_residual(&x, &q, shift);
-                if res.iter().any(|&r| r > i32::MAX as i64 || r < i32::MIN as i64 + 1) {
-                    continue;
-                }
-                let (bits, po, params) = plan_residual(&res, order);
-                let total = bits.saturating_add(order as u64 * (bps as u64 + QLP_PRECISION as u64) + 4 + 5);
-                if total < best.0 {
-                    best = (total, Sub::Lpc(q, shift), res, po, params);
-                }
+    }
+    if n > MAX_LPC * 2 {
+        let sets = lpc_sets(x, MAX_LPC);
+        for &order in &[2usize, 4, 8, 12, 16, 20, 24, 32] {
+            let Some(lp) = sets.get(order - 1) else { continue };
+            let Some((q, shift)) = quantize(lp, QLP_PRECISION) else { continue };
+            let res = lpc_residual(x, &q, shift);
+            if res.iter().any(|&r| r > i32::MAX as i64 || r < i32::MIN as i64 + 1) {
+                continue;
+            }
+            let (bits, po, params) = plan_residual(&res, order);
+            let total = bits.saturating_add(header + order as u64 * (bps as u64 + QLP_PRECISION as u64) + 4 + 5);
+            if total < best.bits {
+                best = Plan { bits: total, sub: Sub::Lpc(q, shift), res, po, params };
             }
         }
     }
+    best
+}
 
-    let mut w = BitWriter::new(n * 3 + 32);
-    // ---- frame header
+fn write_header(w: &mut BitWriter, n: usize, frame_no: u32, rate: u64, chan: u64, bps: u32) {
     w.put(0b11111111111110, 14);
     w.put(0, 1); // reserved
     w.put(0, 1); // fixed block size
     w.put(0b0111, 4); // block size: 16 bits at end of header
-    w.put(0b0011, 4); // 192 kHz
-    w.put(0b0000, 4); // mono
+    w.put(rate, 4);
+    w.put(chan, 4);
     w.put(match bps { 16 => 0b100, 20 => 0b101, _ => 0b110 }, 3); // bits per sample
     w.put(0, 1);
-    utf8_number(&mut w, frame_no);
+    utf8_number(w, frame_no);
     w.put((n - 1) as u64, 16);
     let c8 = crc8(&w.out);
     w.put(c8 as u64, 8);
-    // ---- subframe
-    match &best.1 {
+}
+
+fn write_subframe(w: &mut BitWriter, x: &[i64], bps: u32, p: &Plan) {
+    match &p.sub {
         Sub::Constant => {
             w.put(0, 8);
             w.put_signed(x[0], bps);
         }
         Sub::Verbatim => {
             w.put(0b00000010, 8);
-            for &v in &x {
+            for &v in x {
                 w.put_signed(v, bps);
             }
         }
@@ -423,7 +523,7 @@ pub fn encode_frame_bits(samples: &[i32], frame_no: u32, bits: u32) -> Vec<u8> {
             for &v in &x[..*order] {
                 w.put_signed(v, bps);
             }
-            write_residual(&mut w, &best.2, *order, best.3, &best.4);
+            write_residual(w, &p.res, *order, p.po, &p.params);
         }
         Sub::Lpc(q, shift) => {
             let order = q.len();
@@ -436,10 +536,12 @@ pub fn encode_frame_bits(samples: &[i32], frame_no: u32, bits: u32) -> Vec<u8> {
             for &c in q {
                 w.put_signed(c as i64, QLP_PRECISION);
             }
-            write_residual(&mut w, &best.2, order, best.3, &best.4);
+            write_residual(w, &p.res, order, p.po, &p.params);
         }
     }
-    // ---- footer
+}
+
+fn finish(mut w: BitWriter) -> Vec<u8> {
     w.align();
     let c16 = crc16(&w.out);
     w.put(c16 as u64, 16);
@@ -453,8 +555,12 @@ pub struct Decoded {
     pub frame_no: u32,
     /// Bits per sample of the frame (16, 20 or 24).
     pub bits: u32,
-    /// Samples in the range of `bits`.
+    /// Sample rate given in the frame header (0 = not given).
+    pub rate: u32,
+    /// Samples in the range of `bits` (the left channel of a stereo frame).
     pub samples: Vec<i32>,
+    /// Right channel of a stereo frame (empty for mono).
+    pub right: Vec<i32>,
 }
 
 fn read_utf8(r: &mut BitReader) -> Option<u32> {
@@ -510,7 +616,7 @@ fn read_residual(r: &mut BitReader, n: usize, order: usize, out: &mut Vec<i64>) 
     Some(())
 }
 
-/// Decodes one complete mono FLAC frame. Returns None when the frame is damaged (CRC) or not supported.
+/// Decodes one complete FLAC frame (mono or stereo). Returns None when the frame is damaged (CRC) or not supported.
 pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
     if d.len() < 8 || crc16(&d[..d.len() - 2]) != u16::from_be_bytes([d[d.len() - 2], d[d.len() - 1]]) {
         return None;
@@ -522,9 +628,7 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
     let _variable = r.get(1)?;
     let bs_code = r.get(4)?;
     let sr_code = r.get(4)?;
-    if r.get(4)? != 0 {
-        return None; // mono only
-    }
+    let chan = r.get(4)?;
     let bps = match r.get(3)? {
         0b001 => 8,
         0b010 => 12,
@@ -532,7 +636,7 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
         0b101 => 20,
         0b110 => 24,
         0b111 => 32,
-        0b000 => BPS, // "from the stream header": this stream is always 24-bit
+        0b000 => BPS, // "from the stream header": these streams are 24-bit
         _ => return None,
     };
     r.get(1)?;
@@ -545,21 +649,59 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
         8..=15 => 256 << (bs_code - 8),
         _ => return None,
     };
-    match sr_code {
-        0b1100 => {
-            r.get(8)?;
-        }
-        0b1101 | 0b1110 => {
-            r.get(16)?;
-        }
+    let rate = match sr_code {
+        0b1100 => r.get(8)? as u32 * 1000,
+        0b1101 => r.get(16)? as u32,
+        0b1110 => r.get(16)? as u32 * 10,
         0b1111 => return None,
-        _ => {}
-    }
+        c => rate_of_code(c as u32),
+    };
     let hdr_end = r.pos / 8;
     if crc8(&d[..hdr_end]) != r.get(8)? as u8 {
         return None;
     }
-    // ---- subframe
+    let (a, b) = match chan {
+        0b0000 => (decode_subframe(&mut r, n, bps)?, Vec::new()),
+        0b0001 => (decode_subframe(&mut r, n, bps)?, decode_subframe(&mut r, n, bps)?),
+        0b1000 => {
+            // left / side
+            let l = decode_subframe(&mut r, n, bps)?;
+            let s = decode_subframe(&mut r, n, bps + 1)?;
+            let rr = l.iter().zip(&s).map(|(l, s)| l - s).collect();
+            (l, rr)
+        }
+        0b1001 => {
+            // side / right
+            let s = decode_subframe(&mut r, n, bps + 1)?;
+            let rr = decode_subframe(&mut r, n, bps)?;
+            let l = s.iter().zip(&rr).map(|(s, r)| s + r).collect();
+            (l, rr)
+        }
+        0b1010 => {
+            // mid / side
+            let m = decode_subframe(&mut r, n, bps)?;
+            let s = decode_subframe(&mut r, n, bps + 1)?;
+            let mut l = Vec::with_capacity(n);
+            let mut rr = Vec::with_capacity(n);
+            for (m, s) in m.iter().zip(&s) {
+                let m2 = (m << 1) | (s & 1);
+                l.push((m2 + s) >> 1);
+                rr.push((m2 - s) >> 1);
+            }
+            (l, rr)
+        }
+        _ => return None,
+    };
+    r.align();
+    if r.pos / 8 + 2 != d.len() {
+        return None;
+    }
+    let samples = a.iter().map(|&v| v as i32).collect();
+    let right = b.iter().map(|&v| v as i32).collect();
+    Some(Decoded { frame_no, bits: bps, rate, samples, right })
+}
+
+fn decode_subframe(r: &mut BitReader, n: usize, bps: u32) -> Option<Vec<i64>> {
     if r.get(1)? != 0 {
         return None;
     }
@@ -567,6 +709,9 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
     let mut wasted = 0u32;
     if r.get(1)? == 1 {
         wasted = r.unary()? as u32 + 1;
+    }
+    if wasted >= bps {
+        return None;
     }
     let sbps = bps - wasted;
     let mut x: Vec<i64> = Vec::with_capacity(n);
@@ -589,7 +734,7 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
                 x.push(r.get_signed(sbps)?);
             }
             let mut res = Vec::with_capacity(n);
-            read_residual(&mut r, n, order, &mut res)?;
+            read_residual(r, n, order, &mut res)?;
             for e in res {
                 let i = x.len();
                 let p = match order {
@@ -623,7 +768,7 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
                 q.push(r.get_signed(prec)?);
             }
             let mut res = Vec::with_capacity(n);
-            read_residual(&mut r, n, order, &mut res)?;
+            read_residual(r, n, order, &mut res)?;
             for e in res {
                 let i = x.len();
                 let mut s: i64 = 0;
@@ -635,12 +780,12 @@ pub fn decode_frame(d: &[u8]) -> Option<Decoded> {
         }
         _ => return None,
     }
-    r.align();
-    if r.pos / 8 + 2 != d.len() {
-        return None;
+    if wasted > 0 {
+        for v in x.iter_mut() {
+            *v <<= wasted;
+        }
     }
-    let samples = x.iter().map(|&v| (v << wasted) as i32).collect();
-    Some(Decoded { frame_no, bits: bps, samples })
+    Some(x)
 }
 
 // ---------------------------------------------------------------- float helpers (same scaling as the L24 path)
@@ -790,6 +935,8 @@ pub struct RxStats {
     pub flac: bool,
     /// Bits per sample of the stream (16, 20 or 24).
     pub bits: u32,
+    /// Compact MPX: 0 = no (the composite itself), 1 = FLAC audio, 2 = Opus audio.
+    pub compact: u8,
 }
 
 /// Keeps the last `BLOCK` output samples. Because BLOCK is a multiple of 192 samples, repeating them continues the
@@ -1300,5 +1447,26 @@ mod tests {
         from_bits(&ints, 20, &mut exp);
         assert_eq!(out, exp);
         assert_eq!((t.stats.bits, t.stats.flac), (20, false));
+    }
+
+    #[test]
+    fn stereo_frames_all_channel_codings() {
+        let mut seed = 21u64;
+        let n = 960;
+        let base: Vec<i32> = (0..n).map(|i| (((i as f64) * 0.031).sin() * 20000.0) as i32).collect();
+        let cases: Vec<(Vec<i32>, Vec<i32>)> = vec![
+            (base.clone(), base.clone()),                                                    // identical: side is 0
+            (base.clone(), base.iter().map(|v| -v).collect()),                               // opposite
+            (base.clone(), (0..n).map(|_| (rng(&mut seed) * 30000.0) as i32).collect()),    // unrelated
+            (base.iter().map(|v| v / 3).collect(), base.iter().map(|v| v / 2 + 7).collect()), // correlated
+        ];
+        for (l, r) in cases {
+            for bits in [16u32, 24] {
+                let f = encode_frame_stereo(&l, &r, 5, bits, 48_000);
+                let d = decode_frame(&f).expect("stereo decodes");
+                assert_eq!((d.samples.clone(), d.right.clone()), (l.clone(), r.clone()));
+                assert_eq!((d.rate, d.bits), (48_000, bits));
+            }
+        }
     }
 }
