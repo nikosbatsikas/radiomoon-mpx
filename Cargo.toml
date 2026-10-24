@@ -1,6 +1,6 @@
 [package]
 name = "radiomoon-mpx"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "RadioMoon MPX - FM multiplex transmitter and receiver (stereo, RDS, L24 / lossless FLAC over IP)"
 license = "LicenseRef-RadioMoon"
@@ -29,9 +29,16 @@ rodio = { version = "0.19", default-features = false, features = ["symphonia-all
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.15"
-rand = "0.8"
 ureq = "2"
 socket2 = "0.5"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+tray-icon = { version = "=0.26.1", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
 
 [profile.release]
 opt-level = 3

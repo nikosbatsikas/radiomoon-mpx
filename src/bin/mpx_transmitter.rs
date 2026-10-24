@@ -1,38 +1,43 @@
-//! RadioMoon MPX Transmitter - a small stand-alone program: it takes audio from a sound card input, an internet radio
-//! stream or a folder of audio files (random order), builds the FM multiplex (stereo, pilot, RDS) and sends it to a
-//! 192 kHz sound card and/or over IP to any number of RadioMoon MPX Receivers. It runs by itself, no RadioMoon needed.
+//! RadioMoon MPX Transmitter - a small stand-alone program: it takes audio from an internet radio stream or a sound
+//! card input, builds the FM multiplex (stereo, pilot, RDS) and sends it to a 192 kHz sound card and/or over IP to any
+//! number of RadioMoon MPX Receivers. It runs by itself (no RadioMoon needed), in its window or as a service.
 //! To put RadioMoon on air, use its internet broadcast as the stream source: the song titles become the RadioText.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use eframe::egui::{self, RichText};
+use radiomoon_mpx::host::Host;
 use radiomoon_mpx::look::{self, card, inset, pill, tile};
 use radiomoon_mpx::model::{IpTarget, MpxCfg};
 use radiomoon_mpx::mpx::{LinkStat, MpxHandle};
-use radiomoon_mpx::mpxscope;
+use radiomoon_mpx::mpxscope::{self, Scope};
+use radiomoon_mpx::service;
 use radiomoon_mpx::srcin::{self, SrcCfg, SrcHandle};
+use radiomoon_mpx::status::{self, TxStatus};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 struct Saved {
-    /// "input" | "stream" | "folder"
+    /// "stream" | "input"
     kind: String,
     device: String,
     url: String,
-    folder: String,
-    shuffle: bool,
     gain_db: f32,
+    close_to_tray: bool,
     mpx: MpxCfg,
 }
 
 impl Default for Saved {
     fn default() -> Self {
         let mpx = MpxCfg { autostart: true, card_on: true, rt_from_playlist: true, ..MpxCfg::default() };
-        Saved { kind: "folder".into(), device: String::new(), url: String::new(), folder: String::new(), shuffle: true, gain_db: 0.0, mpx }
+        Saved { kind: "stream".into(), device: String::new(), url: String::new(), gain_db: 0.0, close_to_tray: true, mpx }
     }
 }
 
@@ -51,6 +56,91 @@ fn cfg_path() -> PathBuf {
     dir.join("mpx-transmitter.json")
 }
 
+fn load() -> Saved {
+    let mut s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    s.mpx.migrate();
+    if s.kind != "input" {
+        s.kind = "stream".into(); // the folder source of older versions is gone
+    }
+    s
+}
+
+fn src_cfg(s: &Saved) -> SrcCfg {
+    SrcCfg { kind: s.kind.clone(), device: s.device.clone(), url: s.url.clone(), gain_db: s.gain_db }
+}
+
+fn modified(p: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+}
+
+// ---------------------------------------------------------------- service (no window)
+
+/// The work of the service: runs the transmitter with the saved settings and writes its live status for the window.
+/// Level and RDS changes saved by the window are applied while running; source and outputs need a restart.
+fn service_work(stop: Arc<AtomicBool>) {
+    let path = cfg_path();
+    let st_path = status::path_for(&path);
+    let mut s = load();
+    let mut stamp = modified(&path);
+    let (src, rx) = srcin::start(&src_cfg(&s));
+    let m = MpxHandle::start(&s.mpx, rx);
+    let mut last_now = String::new();
+    let mut checked = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        let now = src.now();
+        if !now.is_empty() && now != last_now {
+            m.set_radiotext(&s.mpx, &now);
+            last_now = now;
+        }
+        if checked.elapsed() > Duration::from_secs(1) {
+            checked = Instant::now();
+            let st = modified(&path);
+            if st != stamp {
+                stamp = st;
+                s = load();
+                m.update(&s.mpx);
+            }
+        }
+        let snap = TxStatus {
+            time_ms: status::now_ms(),
+            status: m.status(),
+            source: src.status(),
+            now: last_now.clone(),
+            peak: m.peak(),
+            card: m.card_status(),
+            links: m.links(),
+            scope: m.scope.lock().map(|g| g.clone()).unwrap_or_default(),
+        };
+        status::write(&st_path, &snap);
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    m.stop();
+    src.stop();
+    status::remove(&st_path);
+}
+
+// ---------------------------------------------------------------- window
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Source,
+    Ip,
+    Card,
+    Signal,
+    Rds,
+    Service,
+}
+
+/// What the window shows while running: from the engine in this program or from the service's status file.
+struct Live {
+    status: String,
+    source: String,
+    now: String,
+    peak: f32,
+    card: String,
+    links: Vec<(IpTarget, LinkStat)>,
+}
+
 struct App {
     s: Saved,
     src: Option<SrcHandle>,
@@ -61,6 +151,12 @@ struct App {
     first: bool,
     /// Settings that only apply after Stop / Start were changed while running.
     pending: bool,
+    tab: Tab,
+    host: Host,
+    /// Latest status of the service, and its analyzer data.
+    svc: Option<TxStatus>,
+    svc_read: Instant,
+    svc_scope: Scope,
     about: bool,
     about_tex: Option<egui::TextureHandle>,
     logo_tex: Option<egui::TextureHandle>,
@@ -69,8 +165,7 @@ struct App {
 impl App {
     fn start(&mut self) {
         self.stop();
-        let c = SrcCfg { kind: self.s.kind.clone(), device: self.s.device.clone(), url: self.s.url.clone(), folder: self.s.folder.clone(), shuffle: self.s.shuffle, gain_db: self.s.gain_db };
-        let (h, rx) = srcin::start(&c);
+        let (h, rx) = srcin::start(&src_cfg(&self.s));
         self.mpx = Some(MpxHandle::start(&self.s.mpx, rx));
         self.src = Some(h);
         self.last_now.clear();
@@ -104,6 +199,34 @@ impl App {
             let _ = std::fs::write(cfg_path(), js);
         }
     }
+
+    /// The service status file, read 4 times a second while the service runs.
+    fn read_service(&mut self) {
+        if !self.host.state().running {
+            self.svc = None;
+            return;
+        }
+        if self.svc_read.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.svc_read = Instant::now();
+        self.svc = status::read::<TxStatus>(&status::path_for(&cfg_path()), |s| s.time_ms);
+        if let Some(st) = &self.svc {
+            if let Ok(mut g) = self.svc_scope.lock() {
+                let max = g.dev_max.max(st.scope.dev_max);
+                *g = st.scope.clone();
+                g.dev_max = max;
+            }
+        }
+    }
+
+    fn live(&self) -> Option<Live> {
+        if let Some(st) = &self.svc {
+            return Some(Live { status: st.status.clone(), source: st.source.clone(), now: st.now.clone(), peak: st.peak, card: st.card.clone(), links: st.links.clone() });
+        }
+        let (src, m) = (self.src.as_ref()?, self.mpx.as_ref()?);
+        Some(Live { status: m.status(), source: src.status(), now: src.now(), peak: m.peak(), card: m.card_status(), links: m.links() })
+    }
 }
 
 fn combo(ui: &mut egui::Ui, id: &str, cur: &mut String, items: &[String], width: f32) -> bool {
@@ -125,7 +248,8 @@ fn cap(ui: &mut egui::Ui, text: &str) {
 
 impl App {
     // ------------------------------------------------------------ header
-    fn header(&mut self, ui: &mut egui::Ui) {
+    fn header(&mut self, ui: &mut egui::Ui, live: Option<&Live>) {
+        let svc = self.host.state();
         ui.horizontal(|ui| {
             ui.add(egui::Image::new((self.logo(ui.ctx()), egui::vec2(20.0, 20.0))));
             ui.label(RichText::new("RadioMoon MPX Transmitter").size(15.0).strong());
@@ -134,88 +258,77 @@ impl App {
                 if ui.button("About").clicked() {
                     self.about = true;
                 }
-                if self.mpx.is_none() {
+                if svc.installed {
+                    // the service does the work: Start / Stop control the service
+                    if svc.running {
+                        if look::danger_button(ui, "■  Stop").on_hover_text("Stops the service").clicked() {
+                            self.host.stop_service();
+                        }
+                    } else if look::primary_button(ui, "▶  Start").on_hover_text("Starts the service").clicked() {
+                        self.host.start_service();
+                    }
+                } else if self.mpx.is_none() {
                     if look::primary_button(ui, "▶  Start").clicked() {
                         self.start();
                     }
-                    pill(ui, "STOPPED", look::DIM);
-                } else {
-                    if look::danger_button(ui, "■  Stop").clicked() {
-                        self.stop();
-                    }
-                    let waiting = self.mpx.as_ref().map(|m| m.status().starts_with("Waiting")).unwrap_or(false);
-                    if waiting {
-                        pill(ui, "NO AUDIO", look::WARN);
-                    } else {
-                        pill(ui, "ON AIR", look::GOOD);
-                    }
+                } else if look::danger_button(ui, "■  Stop").clicked() {
+                    self.stop();
+                }
+                match live {
+                    Some(l) if l.status.starts_with("Waiting") => pill(ui, "NO AUDIO", look::WARN),
+                    Some(_) => pill(ui, "ON AIR", look::GOOD),
+                    None if svc.running => pill(ui, "STARTING", look::WARN),
+                    None => pill(ui, "STOPPED", look::DIM),
+                }
+                if svc.installed {
+                    pill(ui, "SERVICE", look::ACCENT);
                 }
             });
         });
     }
 
     // ------------------------------------------------------------ live overview
-    fn overview(&mut self, ui: &mut egui::Ui, links: &[(IpTarget, LinkStat)]) {
-        let (Some(src), Some(m)) = (&self.src, &self.mpx) else { return };
+    fn overview(&self, ui: &mut egui::Ui, l: &Live) {
         card(ui, "On air", |ui| {
-            look::deviation_bar(ui, m.peak());
-            ui.add_space(6.0);
-            let total: f32 = links.iter().map(|(_, l)| l.mbps).sum();
-            let up = links.iter().filter(|(_, l)| l.ok).count();
+            look::deviation_bar(ui, l.peak);
+            ui.add_space(4.0);
+            let total: f32 = l.links.iter().map(|(_, x)| x.mbps).sum();
+            let up = l.links.iter().filter(|(_, x)| x.ok).count();
             ui.horizontal_wrapped(|ui| {
-                tile(ui, "Deviation peak", &format!("{:.1}", m.peak() * 75.0), "kHz", if m.peak() > 1.0 { look::BAD } else { look::TEXT }, 110.0);
+                tile(ui, "Deviation peak", &format!("{:.1}", l.peak * 75.0), "kHz", if l.peak > 1.0 { look::BAD } else { look::TEXT }, 110.0);
                 tile(ui, "IP bandwidth (total)", &look::mbps(total), "Mbit/s", look::ACCENT, 150.0);
-                tile(ui, "IP outputs", &format!("{up} / {}", links.len()), "working", if up == links.len() { look::GOOD } else { look::WARN }, 120.0);
-                let card_on = !m.card_status().is_empty();
+                tile(ui, "IP outputs", &format!("{up} / {}", l.links.len()), "working", if up == l.links.len() { look::GOOD } else { look::WARN }, 120.0);
+                let card_on = !l.card.is_empty();
                 tile(ui, "Sound card", if card_on { "On" } else { "Off" }, "192 kHz", if card_on { look::GOOD } else { look::DIM }, 100.0);
             });
-            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 look::dot(ui, look::GOOD);
-                ui.label(src.status());
+                ui.label(&l.source);
             });
-            let now = src.now();
-            if !now.is_empty() {
-                ui.label(RichText::new(format!("RadioText: {now}")).color(look::DIM));
+            if !l.now.is_empty() {
+                ui.label(RichText::new(format!("RadioText: {}", l.now)).color(look::DIM));
             }
-            let cs = m.card_status();
-            if !cs.is_empty() {
-                ui.label(RichText::new(cs).small().color(look::DIM));
+            if !l.card.is_empty() {
+                ui.label(RichText::new(&l.card).small().color(look::DIM));
             }
         });
     }
 
-    // ------------------------------------------------------------ settings cards
+    // ------------------------------------------------------------ settings tabs
     fn source_card(&mut self, ui: &mut egui::Ui) -> bool {
         let mut restart = false;
         card(ui, "Audio source", |ui| {
             ui.horizontal_wrapped(|ui| {
-                restart |= ui.selectable_value(&mut self.s.kind, "folder".to_string(), "Folder").changed();
                 restart |= ui.selectable_value(&mut self.s.kind, "stream".to_string(), "Internet stream").changed();
                 restart |= ui.selectable_value(&mut self.s.kind, "input".to_string(), "Sound input").changed();
             });
-            ui.add_space(4.0);
-            match self.s.kind.as_str() {
-                "folder" => {
-                    ui.horizontal(|ui| {
-                        restart |= ui.add(egui::TextEdit::singleline(&mut self.s.folder).hint_text("Folder of audio files").desired_width((ui.available_width() - 90.0).max(100.0))).changed();
-                        if ui.button("Browse...").clicked() {
-                            if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                                self.s.folder = p.to_string_lossy().to_string();
-                                restart = true;
-                            }
-                        }
-                    });
-                    restart |= ui.checkbox(&mut self.s.shuffle, "Random order (a different order at every start)").changed();
-                }
-                "stream" => {
-                    restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
-                    ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
-                }
-                _ => {
-                    let w = (ui.available_width() - 10.0).max(150.0);
-                    restart |= combo(ui, "in", &mut self.s.device, &self.ins, w);
-                }
+            ui.add_space(2.0);
+            if self.s.kind == "stream" {
+                restart |= ui.add(egui::TextEdit::singleline(&mut self.s.url).hint_text("http://server:8000/stream").desired_width(ui.available_width())).changed();
+                ui.label(RichText::new("MP3 or AAC over HTTP / HTTPS. The song titles sent by the server become the RadioText.").small().color(look::DIM));
+            } else {
+                let w = (ui.available_width() - 10.0).max(150.0);
+                restart |= combo(ui, "in", &mut self.s.device, &self.ins, w);
             }
             ui.horizontal(|ui| {
                 cap(ui, "Level");
@@ -277,7 +390,7 @@ impl App {
                 ch |= ui.add(egui::TextEdit::singleline(&mut c.rt).desired_width(ui.available_width().max(160.0)).char_limit(64)).changed();
                 ui.end_row();
             });
-            ch |= ui.checkbox(&mut c.rt_from_playlist, "RadioText from the song: file name (folder) or song title sent by the stream server").changed();
+            ch |= ui.checkbox(&mut c.rt_from_playlist, "RadioText from the song title sent by the stream server").changed();
             ui.horizontal(|ui| {
                 ch |= ui.checkbox(&mut c.tp, "TP").changed();
                 ch |= ui.checkbox(&mut c.ta, "TA").changed();
@@ -303,9 +416,8 @@ impl App {
     }
 
     /// The list of receivers, each with its settings and, while running, its live bandwidth.
-    fn ip_card(&mut self, ui: &mut egui::Ui, links: &[(IpTarget, LinkStat)]) -> bool {
+    fn ip_card(&mut self, ui: &mut egui::Ui, links: &[(IpTarget, LinkStat)], running: bool) -> bool {
         let mut restart = false;
-        let running = self.mpx.is_some();
         card(ui, "IP outputs", |ui| {
             let c = &mut self.s.mpx;
             restart |= ui.checkbox(&mut c.ip_on, "Send over IP (24-bit, 192 kHz) to these receivers").changed();
@@ -405,14 +517,20 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        ctx.request_repaint_after(Duration::from_millis(250));
+        let svc = self.host.state();
         if self.first {
             self.first = false;
-            if self.s.mpx.autostart {
+            if self.s.mpx.autostart && !svc.installed {
                 self.start();
             }
         }
-        // RadioText follows the file that is playing or the stream's song title
+        // with the service installed, the transmitter runs there and not in this window
+        if svc.installed && self.mpx.is_some() {
+            self.stop();
+        }
+        self.read_service();
+        // RadioText follows the stream's song title
         if let (Some(src), Some(m)) = (&self.src, &self.mpx) {
             let now = src.now();
             if !now.is_empty() && now != self.last_now {
@@ -420,9 +538,14 @@ impl eframe::App for App {
                 self.last_now = now;
             }
         }
-        let links: Vec<(IpTarget, LinkStat)> = self.mpx.as_ref().map(|m| m.links()).unwrap_or_default();
+        let live = self.live();
+        let tip = match &live {
+            Some(l) => format!("{}{} · {:.2} Mbit/s over IP", if svc.running { "Service · " } else { "" }, if l.status.starts_with("Waiting") { "No audio" } else { "On air" }, l.links.iter().map(|(_, x)| x.mbps).sum::<f32>()),
+            None => "Stopped".to_string(),
+        };
+        self.host.frame(ctx, self.s.close_to_tray, live.is_some(), &tip);
         egui::TopBottomPanel::top("header").frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
-            self.header(ui);
+            self.header(ui, live.as_ref());
         });
         look::about_window(
             ctx,
@@ -433,10 +556,10 @@ impl eframe::App for App {
                 tagline: "FM multiplex generator with RDS, sent to sound cards and over IP",
                 features: &[
                     "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
-                    "Folder, internet stream or sound input as the source",
+                    "Internet stream or sound input as the source",
                     "Any number of IP receivers: UDP or TCP, L16/L20/L24 or FLAC lossless",
                     "QoS (DSCP) marking, live bandwidth per receiver",
-                    "192 kHz sound card output and signal analyzer",
+                    "Runs as a Windows / Linux service, system tray icon",
                 ],
                 png: look::TRANSMITTER_ICON,
                 version: VERSION,
@@ -446,34 +569,54 @@ impl eframe::App for App {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let mut ch = false; // changes applied while running
                 let mut restart = false; // changes of the source or the outputs
-                self.overview(ui, &links);
-                let wide = ui.available_width() >= 760.0;
-                if wide {
-                    ui.columns(2, |cols| {
-                        restart |= self.source_card(&mut cols[0]);
-                        ch |= self.signal_card(&mut cols[0]);
-                        ch |= self.rds_card(&mut cols[0]);
-                        restart |= self.card_output(&mut cols[1]);
-                        restart |= self.ip_card(&mut cols[1], &links);
-                    });
-                } else {
-                    restart |= self.source_card(ui);
-                    restart |= self.card_output(ui);
-                    restart |= self.ip_card(ui, &links);
-                    ch |= self.signal_card(ui);
-                    ch |= self.rds_card(ui);
+                if let Some(l) = &live {
+                    self.overview(ui, l);
                 }
-                card(ui, "", |ui| {
-                    ch |= ui.checkbox(&mut self.s.mpx.autostart, "Start transmitting when the program starts").changed();
-                    if self.pending {
-                        ui.label(RichText::new("Source and output changes are applied when you press Stop and Start.").color(look::WARN));
+                // ---- tabs
+                ui.horizontal_wrapped(|ui| {
+                    for (t, name) in [(Tab::Source, "Audio source"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Service, "Service & tray")] {
+                        let on = self.tab == t;
+                        let txt = RichText::new(name).strong().color(if on { look::ACCENT } else { look::TEXT });
+                        if ui.add(egui::Button::new(txt).fill(if on { look::CARD } else { look::PANEL }).stroke(egui::Stroke::new(1.0_f32, if on { look::ACCENT } else { look::BORDER }))).clicked() {
+                            self.tab = t;
+                        }
                     }
                 });
-                if let Some(m) = &self.mpx {
+                ui.add_space(4.0);
+                let links: Vec<(IpTarget, LinkStat)> = live.as_ref().map(|l| l.links.clone()).unwrap_or_default();
+                let running = live.is_some();
+                match self.tab {
+                    Tab::Source => restart |= self.source_card(ui),
+                    Tab::Ip => restart |= self.ip_card(ui, &links, running),
+                    Tab::Card => restart |= self.card_output(ui),
+                    Tab::Signal => ch |= self.signal_card(ui),
+                    Tab::Rds => ch |= self.rds_card(ui),
+                    Tab::Service => {
+                        let mut c2t = self.s.close_to_tray;
+                        if self.host.settings_ui(ui, &mut c2t) {
+                            self.s.close_to_tray = c2t;
+                            ch = true;
+                        }
+                        card(ui, "", |ui| {
+                            ch |= ui.checkbox(&mut self.s.mpx.autostart, "Start transmitting when the program starts (without the service)").changed();
+                        });
+                    }
+                }
+                if self.pending || (restart && svc.running) {
+                    let msg = if svc.running { "Source and output changes are applied when the service is restarted (Service & tray > Restart)." } else { "Source and output changes are applied when you press Stop and Start." };
+                    ui.label(RichText::new(msg).color(look::WARN));
+                }
+                if live.is_some() {
                     card(ui, "Signal analysis", |ui| {
-                        mpxscope::draw(ui, &m.scope);
+                        if let Some(m) = &self.mpx {
+                            mpxscope::draw(ui, &m.scope);
+                        } else {
+                            mpxscope::draw(ui, &self.svc_scope);
+                        }
                     });
-                    if ch {
+                }
+                if ch {
+                    if let Some(m) = &self.mpx {
                         m.update(&self.s.mpx);
                     }
                 }
@@ -481,7 +624,7 @@ impl eframe::App for App {
                     self.pending = true;
                 }
                 if ch || restart {
-                    self.persist();
+                    self.persist(); // a running service picks up level and RDS changes from the saved file
                 }
             });
         });
@@ -494,13 +637,16 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result<()> {
-    let mut s: Saved = std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    s.mpx.migrate();
+    if service::requested() {
+        service::run(&service::TRANSMITTER, service_work);
+        return Ok(());
+    }
+    let s = load();
     let outs: Vec<String> = rodio::cpal::default_host().output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
     let ins = srcin::list_inputs();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 760.0])
+            .with_inner_size([860.0, 720.0])
             .with_min_inner_size([520.0, 400.0])
             .with_title("RadioMoon MPX Transmitter")
             .with_icon(std::sync::Arc::new(look::icon(look::TRANSMITTER_ICON))),
@@ -511,8 +657,25 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             look::apply_style(&cc.egui_ctx);
-            Ok(Box::new(App { s, src: None, mpx: None, outs, ins, last_now: String::new(), first: true, pending: false, about: false, about_tex: None, logo_tex: None }))
+            let host = Host::new(cc, service::TRANSMITTER, look::TRANSMITTER_ICON);
+            Ok(Box::new(App {
+                s,
+                src: None,
+                mpx: None,
+                outs,
+                ins,
+                last_now: String::new(),
+                first: true,
+                pending: false,
+                tab: Tab::Source,
+                host,
+                svc: None,
+                svc_read: Instant::now(),
+                svc_scope: mpxscope::new_scope(),
+                about: false,
+                about_tex: None,
+                logo_tex: None,
+            }))
         }),
     )
 }
-

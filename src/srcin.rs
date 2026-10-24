@@ -1,26 +1,21 @@
-//! Audio sources for the stand-alone MPX transmitter: a sound card input, an internet radio stream or a folder of
-//! audio files played in random order. Everything is delivered as 44.1 kHz stereo blocks at real-time pace.
+//! Audio sources for the stand-alone MPX transmitter: a sound card input or an internet radio stream.
+//! Everything is delivered as 44.1 kHz stereo blocks at real-time pace.
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rodio::cpal::SampleFormat;
 use rodio::{Decoder, Source};
 use std::collections::VecDeque;
-use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const EXTS: [&str; 9] = ["mp3", "wav", "flac", "ogg", "m4a", "aac", "mp4", "opus", "wma"];
-
 #[derive(Clone, Debug)]
 pub struct SrcCfg {
-    /// "input" | "stream" | "folder"
+    /// "input" | "stream"
     pub kind: String,
     pub device: String,
     pub url: String,
-    pub folder: String,
-    pub shuffle: bool,
     pub gain_db: f32,
 }
 
@@ -72,7 +67,7 @@ impl SrcHandle {
     pub fn status(&self) -> String {
         self.sh.status.lock().map(|g| g.clone()).unwrap_or_default()
     }
-    /// Title of the file being played (folder source) or the song title sent by the stream server.
+    /// The song title sent by the stream server (Icecast / Shoutcast StreamTitle).
     pub fn now(&self) -> String {
         self.sh.now.lock().map(|g| g.clone()).unwrap_or_default()
     }
@@ -135,9 +130,6 @@ pub fn start(cfg: &SrcCfg) -> (SrcHandle, Receiver<Vec<f32>>) {
     match cfg.kind.as_str() {
         "stream" => {
             std::thread::spawn(move || stream_thread(c.url, s2));
-        }
-        "folder" => {
-            std::thread::spawn(move || folder_thread(c.folder, c.shuffle, s2));
         }
         _ => {
             std::thread::spawn(move || capture_thread(c.device, s2));
@@ -380,60 +372,6 @@ fn stream_thread(url: String, sh: Arc<Shared>) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-}
-
-// ---------------------------------------------------------------- folder of audio files
-fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if depth < 8 {
-                scan(&p, out, depth + 1);
-            }
-        } else if p.extension().and_then(|x| x.to_str()).map(|x| EXTS.contains(&x.to_lowercase().as_str())).unwrap_or(false) {
-            out.push(p);
-        }
-    }
-}
-
-fn folder_thread(folder: String, shuffle: bool, sh: Arc<Shared>) {
-    use rand::seq::SliceRandom;
-    while !sh.stop.load(Ordering::Relaxed) {
-        let mut files = Vec::new();
-        scan(std::path::Path::new(&folder), &mut files, 0);
-        if files.is_empty() {
-            sh.set_status("No audio files in the folder");
-            for _ in 0..30 {
-                if sh.stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            continue;
-        }
-        files.sort();
-        if shuffle {
-            files.shuffle(&mut rand::thread_rng()); // a different order every round and every start
-        }
-        for p in files {
-            if sh.stop.load(Ordering::Relaxed) {
-                return;
-            }
-            let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let dec = match File::open(&p).ok().and_then(|f| Decoder::new(BufReader::new(f)).ok()) {
-                Some(d) => d,
-                None => continue,
-            };
-            if let Ok(mut n) = sh.now.lock() {
-                *n = name.clone();
-            }
-            sh.set_status(&format!("Playing: {name}"));
-            if !feed(dec.convert_samples::<f32>(), &sh) {
-                return;
-            }
         }
     }
 }

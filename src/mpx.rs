@@ -27,7 +27,8 @@ fn rtp_header(out: &mut Vec<u8>, pt: u8, seq: u16, ts: u32, ssrc: u32) {
 pub const HIST: usize = 240;
 
 /// Live numbers of one IP output (read by the window).
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LinkStat {
     /// Bandwidth on the network now, Mbit/s (payload + RTP + IP/UDP or TCP headers).
     pub mbps: f32,

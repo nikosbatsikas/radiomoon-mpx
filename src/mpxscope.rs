@@ -10,7 +10,8 @@ const COLS: usize = 512; // spectrum columns, 0 .. 96 kHz
 const WAVE: usize = 1152; // samples shown in the oscilloscope (6 ms)
 const MAXF: f32 = 96_000.0; // Nyquist at 192 kHz
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ScopeData {
     pub active: bool,
     /// spectrum in dB relative to 75 kHz deviation, COLS values for 0 .. 96 kHz
