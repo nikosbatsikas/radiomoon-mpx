@@ -42,6 +42,17 @@ The Transmitter sends to any number of receivers (**Add receiver**); each output
 
 Protocols: UDP (RTP payload types: L24 = 97, FLAC = 98, L16 = 99, L20 = 100) or TCP (FLAC streams start with `RMF1`, 16/20-bit PCM with `RMP1` + one byte with the bits, 24-bit PCM is raw). With FLAC every 2 ms packet (384 samples) is one complete, standard FLAC frame (24-bit, mono, 192 kHz); over TCP the stream starts with `RMF1` and every frame follows as a 16-bit length (big endian) and the frame. The receiver detects the format by itself.
 
+### Compact MPX
+
+Like μMPX, but for RadioMoon MPX Transmitter -> RadioMoon MPX Receiver (not compatible with Telos / Omnia μMPX, which is a closed format). The transmitter sends the processed stereo audio (after the 16 kHz filter, pre-emphasis and limiter) plus the levels and the RDS data; the receiver rebuilds the composite with exactly the same stereo encoder, pilot and RDS generator.
+
+| Format | Bandwidth on the network | Audio |
+|---|---|---|
+| Compact · FLAC | about 0.95 Mbit/s | lossless (16-bit, 48 kHz) |
+| Compact · Opus 320 / 256 / 192 / 128 | about 0.35 / 0.28 / 0.21 / 0.15 Mbit/s | 256 is transparent; 128 for weak links |
+
+Packets: RTP payload type 101 (UDP) or a TCP stream starting with `RMC1`; each packet carries the audio frame, the four levels and (every 0.5 s or when it changes) the RDS data. A lost Opus packet is filled by Opus' own concealment, a lost FLAC packet by silence; the pilot and RDS never stop. Use the full composite formats (PCM / FLAC) when the transmitter's exact composite waveform must arrive, e.g. after an external composite clipper.
+
 **QoS:** every output marks its packets with a DSCP class: EF (46, default) for real-time audio, AF41 (34) on AES67 networks, CS5, CS6, off, or any value 0-63. Linux and macOS set it directly. Windows ignores the marking of programs unless a QoS policy allows it: Group Policy > Computer Configuration > Windows Settings > Policy-based QoS > new policy for `RadioMoon-MPX-Transmitter.exe` with the DSCP value.
 
 A lost UDP packet is concealed by repeating the last 2 ms. That is a whole number of cycles of 19, 38 and 57 kHz, so pilot, stereo and RDS stay in phase (radios do not drop to mono or lose RDS) and the timing stays exact. The receiver status shows the format, the bitrate and the lost / concealed packets.

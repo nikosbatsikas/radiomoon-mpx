@@ -1,6 +1,7 @@
 //! MPX receiver (transmitter site): IP -> 192 kHz sound card. Used by the separate receiver program.
 //! L24 and FLAC are detected automatically (RTP payload type over UDP, the stream start over TCP).
 use crate::mpx::push_hist;
+use crate::compact::{CompactRx, CompactTcp, TCP_COMPACT_MAGIC};
 use crate::mpxflac::{Depacketizer, RxStats, TcpDeframer};
 use crate::mpxio::{card_thread, get, set, track_peak, Queue, Text};
 use std::collections::VecDeque;
@@ -30,6 +31,7 @@ struct RxStatsDef {
     late: u64,
     flac: bool,
     bits: u32,
+    compact: u8,
 }
 
 /// Live numbers of the receiver (read by the window).
@@ -102,9 +104,60 @@ impl Meter {
     }
 }
 
+/// A TCP stream: the format is known after its first 4 bytes.
+enum TcpIn {
+    Unknown(Vec<u8>),
+    Compact(CompactTcp),
+    Other(TcpDeframer),
+}
+
+impl TcpIn {
+    fn feed(&mut self, data: &[u8], out: &mut Vec<f32>) {
+        if let TcpIn::Unknown(b) = self {
+            b.extend_from_slice(data);
+            if b.len() < 4 {
+                return;
+            }
+            let first = std::mem::take(b);
+            if &first[..4] == TCP_COMPACT_MAGIC {
+                let mut c = CompactTcp::new();
+                c.feed(&first[4..], out);
+                *self = TcpIn::Compact(c);
+            } else {
+                let mut d = TcpDeframer::new();
+                d.feed(&first, out);
+                *self = TcpIn::Other(d);
+            }
+            return;
+        }
+        match self {
+            TcpIn::Compact(c) => c.feed(data, out),
+            TcpIn::Other(d) => d.feed(data, out),
+            TcpIn::Unknown(_) => {}
+        }
+    }
+    fn stats(&self) -> RxStats {
+        match self {
+            TcpIn::Compact(c) => c.stats,
+            TcpIn::Other(d) => d.stats,
+            TcpIn::Unknown(_) => RxStats::default(),
+        }
+    }
+}
+
+/// Name of the received format, e.g. "FLAC 24-bit", "L16", "Compact MPX (Opus)".
+pub fn format_name(st: &RxStats) -> String {
+    let bits = if st.bits == 0 { 24 } else { st.bits };
+    match st.compact {
+        1 => "Compact MPX (FLAC)".into(),
+        2 => "Compact MPX (Opus)".into(),
+        _ if st.flac => format!("FLAC {bits}-bit"),
+        _ => format!("L{bits}"),
+    }
+}
+
 fn status_line(v: &RxView) -> String {
-    let bits = if v.stats.bits == 0 { 24 } else { v.stats.bits };
-    let fmt = if v.flac { format!("FLAC {bits}-bit") } else { format!("L{bits}") };
+    let fmt = format_name(&v.stats);
     let mut t = format!("Receiving {fmt} from {}, {:.2} Mbit/s, buffer {} ms", v.from, v.mbps, v.buffer_ms);
     if v.stats.lost > 0 || v.stats.bad > 0 {
         t += &format!("; lost packets {} (restored {}, concealed {:.0} ms)", v.stats.lost + v.stats.bad, v.stats.recovered, v.stats.concealed as f64 / 192.0);
@@ -154,7 +207,7 @@ impl RxHandle {
                     let _ = s.set_nonblocking(false);
                     let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
                     let mut buf = vec![0u8; 16384];
-                    let mut de = TcpDeframer::new(); // a new connection may use the other format
+                    let mut de = TcpIn::Unknown(Vec::new()); // a new connection may use another format
                     let who = who.to_string();
                     while !st.load(Ordering::Relaxed) {
                         match s.read(&mut buf) {
@@ -172,7 +225,7 @@ impl RxHandle {
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
                             Err(_) => break,
                         }
-                        if meter.tick(&vw, &who, &de.stats, &q, &card) {
+                        if meter.tick(&vw, &who, &de.stats(), &q, &card) {
                             if let Ok(v) = vw.lock() {
                                 set(&stt, &status_line(&v));
                             }
@@ -191,11 +244,16 @@ impl RxHandle {
                 let mut buf = vec![0u8; 65536];
                 let mut from = String::from("-");
                 let mut de = Depacketizer::new();
+                let mut cx = CompactRx::new();
+                let mut compact = false;
                 set(&stt, &format!("Waiting for packets on UDP port {port} ..."));
                 while !st.load(Ordering::Relaxed) {
                     if let Ok((n, a)) = sock.recv_from(&mut buf) {
                         samples.clear();
-                        if de.packet(&buf[..n], &mut samples) {
+                        let p = &buf[..n];
+                        compact = CompactRx::is_compact(p);
+                        let ok = if compact { cx.packet(p, &mut samples) } else { de.packet(p, &mut samples) };
+                        if ok {
                             from = a.to_string();
                             meter.add(n as u64 + 28);
                             if !samples.is_empty() {
@@ -205,7 +263,7 @@ impl RxHandle {
                             }
                         }
                     }
-                    if meter.tick(&vw, &from, &de.stats, &q, &card) {
+                    if meter.tick(&vw, &from, if compact { &cx.stats } else { &de.stats }, &q, &card) {
                         if let Ok(v) = vw.lock() {
                             if v.receiving {
                                 set(&stt, &status_line(&v));

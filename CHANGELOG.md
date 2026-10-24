@@ -2,6 +2,14 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.4.0
+- **Compact MPX** (like μMPX, for RadioMoon MPX Transmitter -> Receiver): instead of the composite waveform the transmitter sends the processed stereo audio (band-limited, pre-emphasised and limited) with the levels and the RDS data; the receiver rebuilds the composite with the same stereo matrix, 19 kHz pilot and RDS encoder. Choose it per receiver in IP outputs > Format:
+  - **Compact · FLAC**: the audio lossless (16-bit, 48 kHz), about 0.95 Mbit/s.
+  - **Compact · Opus**: 320 / 256 / 192 / 128 kbit/s, about 0.35 / 0.28 / 0.21 / 0.15 Mbit/s on the network.
+  The rebuilt composite has the same audio, pilot, stereo and RDS levels as the original (checked band by band). Lost packets: Opus fills the gap with its own concealment, FLAC with silence; pilot and RDS continue without a break. Works over UDP (RTP payload type 101) and TCP ("RMC1").
+- Receiver: detects Compact MPX by itself and shows "Compact / Opus audio" or "Compact / FLAC audio".
+- Not compatible with Telos / Omnia μMPX equipment (a closed, licensed format).
+
 ## 1.3.0
 - **Run as a service** (Windows and Linux): "Service & tray" > Install as service. On Windows it is a Windows service that starts with the computer, before anyone logs in, and keeps running after logoff (restarted automatically if it stops). On Linux it is a systemd user service. The service uses the settings of the window, and the window shows its live status, bandwidth and analyzer and starts / stops it. Level and RDS changes reach a running transmitter service at once; source and output changes with Restart.
 - **System tray icon** (Windows and Linux desktops): coloured while running, grey when stopped, with the state in the tooltip; menu Show / Exit. Closing the window keeps the program running in the tray (can be switched off).

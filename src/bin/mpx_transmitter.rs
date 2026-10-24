@@ -456,22 +456,43 @@ impl App {
                             restart |= ui.selectable_value(&mut t.proto, "udp".to_string(), "UDP (RTP)").changed();
                             restart |= ui.selectable_value(&mut t.proto, "tcp".to_string(), "TCP").changed();
                         });
-                        egui::ComboBox::from_id_salt(("codec", i)).width(112.0).selected_text(if t.codec == "flac" { "FLAC lossless" } else { "PCM uncompressed" }).show_ui(ui, |ui| {
+                        let fmt_name = match t.codec.as_str() {
+                            "flac" => "FLAC lossless",
+                            "cflac" => "Compact · FLAC",
+                            "copus" => "Compact · Opus",
+                            _ => "PCM uncompressed",
+                        };
+                        egui::ComboBox::from_id_salt(("codec", i)).width(118.0).selected_text(fmt_name).show_ui(ui, |ui| {
+                            ui.label(RichText::new("The composite (192 kHz)").small().color(look::DIM));
                             restart |= ui.selectable_value(&mut t.codec, "flac".to_string(), "FLAC lossless").changed();
                             restart |= ui.selectable_value(&mut t.codec, "l24".to_string(), "PCM uncompressed").changed();
-                        });
-                        let est = |codec: &str, bits: u32| -> f32 {
-                            // typical bandwidth incl. headers; FLAC depends on the audio
-                            let pcm = 192_000.0 * bits as f32 / 1e6 + 0.32;
-                            if codec == "flac" { pcm * 0.8 } else { pcm }
-                        };
-                        let shown_bits = t.bits();
-                        egui::ComboBox::from_id_salt(("bits", i)).width(120.0).selected_text(format!("{shown_bits}-bit, 192 kHz")).show_ui(ui, |ui| {
-                            for b in [24u32, 20, 16] {
-                                let txt = format!("{b}-bit (about {:.1} Mbit/s)", est(&t.codec, b));
-                                restart |= ui.selectable_value(&mut t.bits, b, txt).changed();
-                            }
-                        });
+                            ui.separator();
+                            ui.label(RichText::new("Compact MPX: audio + RDS, the receiver rebuilds the composite").small().color(look::DIM));
+                            restart |= ui.selectable_value(&mut t.codec, "cflac".to_string(), "Compact · FLAC (lossless audio, about 0.9 Mbit/s)").changed();
+                            restart |= ui.selectable_value(&mut t.codec, "copus".to_string(), "Compact · Opus (0.15 - 0.35 Mbit/s)").changed();
+                        })
+                        .response
+                        .on_hover_text("Compact MPX needs the RadioMoon MPX Receiver 1.4.0 or newer");
+                        if t.codec == "copus" {
+                            egui::ComboBox::from_id_salt(("kbps", i)).width(96.0).selected_text(format!("{} kbit/s", t.opus_kbps)).show_ui(ui, |ui| {
+                                for (k, note) in [(320u32, "best"), (256, "transparent, recommended"), (192, "very good"), (128, "good, weak links")] {
+                                    restart |= ui.selectable_value(&mut t.opus_kbps, k, format!("{k} kbit/s ({note})")).changed();
+                                }
+                            });
+                        } else if !t.is_compact() {
+                            let est = |codec: &str, bits: u32| -> f32 {
+                                // typical bandwidth incl. headers; FLAC depends on the audio
+                                let pcm = 192_000.0 * bits as f32 / 1e6 + 0.32;
+                                if codec == "flac" { pcm * 0.8 } else { pcm }
+                            };
+                            let shown_bits = t.bits();
+                            egui::ComboBox::from_id_salt(("bits", i)).width(120.0).selected_text(format!("{shown_bits}-bit, 192 kHz")).show_ui(ui, |ui| {
+                                for b in [24u32, 20, 16] {
+                                    let txt = format!("{b}-bit (about {:.1} Mbit/s)", est(&t.codec, b));
+                                    restart |= ui.selectable_value(&mut t.bits, b, txt).changed();
+                                }
+                            });
+                        }
                         egui::ComboBox::from_id_salt(("dscp", i)).width(80.0).selected_text(format!("QoS {}", t.dscp_name())).show_ui(ui, |ui| {
                             for (v, name) in [(46u8, "EF (46): real-time audio, recommended"), (34, "AF41 (34): AES67 audio"), (40, "CS5 (40)"), (48, "CS6 (48)"), (0, "Off: no marking")] {
                                 restart |= ui.selectable_value(&mut t.dscp, v, name).changed();
@@ -482,7 +503,7 @@ impl App {
                         restart |= ui.add(egui::DragValue::new(&mut t.dscp).range(0..=63).prefix("DSCP ")).changed();
                     });
                     if let Some(l) = live {
-                        let saving = if t.codec == "flac" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
+                        let saving = if t.codec != "l24" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
                         look::sparkline(ui, &l.hist, 32.0, look::ACCENT);
                     } else if running && t.enabled && ip_on {
@@ -557,7 +578,7 @@ impl eframe::App for App {
                 features: &[
                     "Stereo MPX with 19 kHz pilot, RDS and RadioText from the song",
                     "Internet stream or sound input as the source",
-                    "Any number of IP receivers: UDP or TCP, L16/L20/L24 or FLAC lossless",
+                    "Any number of IP receivers: UDP or TCP, L16/L20/L24, FLAC lossless or Compact MPX (FLAC / Opus)",
                     "QoS (DSCP) marking, live bandwidth per receiver",
                     "Runs as a Windows / Linux service, system tray icon",
                 ],

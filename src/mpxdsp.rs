@@ -265,12 +265,77 @@ impl PreEmph {
     }
 }
 
+// ---------------------------------------------------------------- the composite (stereo matrix, pilot, RDS)
+
+/// Builds the composite signal from processed stereo audio (band-limited, pre-emphasised, limited):
+/// L+R, L-R on 38 kHz, the 19 kHz pilot and RDS on 57 kHz, all locked to the same phase.
+/// Used by the generator and by the receiver of Compact MPX, so both produce the same signal.
+pub struct Composer {
+    pub fs: u32,
+    pub params: MpxParams,
+    pub rds: RdsEncoder,
+    p: f64,       // pilot phase in turns, counted over 16 pilot cycles (= one RDS bit)
+    rds_sym: f32, // current RDS data polarity (+1/-1)
+    /// Largest absolute composite value since the last `take_peak`.
+    peak: f32,
+}
+
+impl Composer {
+    pub fn new(fs: u32, params: MpxParams, rds: RdsData) -> Composer {
+        let mut c = Composer { fs, params, rds: RdsEncoder::new(rds), p: 0.0, rds_sym: 1.0, peak: 0.0 };
+        c.rds_sym = if c.rds.next_bit() == 1 { 1.0 } else { -1.0 };
+        c
+    }
+
+    pub fn take_peak(&mut self) -> f32 {
+        std::mem::replace(&mut self.peak, 0.0)
+    }
+
+    /// One composite sample from one stereo sample.
+    #[inline]
+    pub fn push(&mut self, l: f32, r: f32) -> f32 {
+        let pr = &self.params;
+        let pinc = 19_000.0 / self.fs as f64;
+        self.p += pinc;
+        if self.p >= 16.0 {
+            self.p -= 16.0;
+        }
+        if self.p < pinc {
+            // a new RDS bit starts exactly every 16 pilot cycles
+            self.rds_sym = if self.rds.next_bit() == 1 { 1.0 } else { -1.0 };
+        }
+        let th = 2.0 * PI * self.p; // pilot angle (wraps seamlessly: 16 cycles)
+        let m = (l + r) * 0.5;
+        let mut c;
+        if pr.stereo {
+            let s = (l - r) * 0.5;
+            c = pr.audio_level * (m + s * (2.0 * th).sin() as f32) + pr.pilot_level * th.sin() as f32;
+        } else {
+            c = pr.audio_level * m;
+        }
+        if self.rds.data.enabled && pr.rds_level > 0.0 {
+            // biphase symbol: one full sine period per bit, on the 57 kHz carrier
+            let sym = (th / 16.0).sin() as f32 * self.rds_sym;
+            c += pr.rds_level * sym * (3.0 * th).sin() as f32;
+        }
+        c *= pr.output;
+        let c = c.clamp(-1.0, 1.0);
+        let a = c.abs();
+        if a > self.peak {
+            self.peak = a;
+        }
+        c
+    }
+}
+
 // ---------------------------------------------------------------- the generator
 
 pub struct MpxEncoder {
     pub fs: u32,
-    pub params: MpxParams,
-    pub rds: RdsEncoder,
+    pub comp: Composer,
+    /// When set, the processed stereo audio (after filter, pre-emphasis and limiter) is also appended here,
+    /// interleaved L R at `fs` (used for Compact MPX).
+    pub tap: Option<Vec<f32>>,
     in_rate: f64,
     hist: [[f32; 2]; 4],
     mu: f64,
@@ -281,17 +346,14 @@ pub struct MpxEncoder {
     pre_r: PreEmph,
     pre_tau: f32,
     gain: f32,
-    p: f64,        // pilot phase in turns, counted over 16 pilot cycles (= one RDS bit)
-    rds_sym: f32,  // current RDS data polarity (+1/-1)
-    /// Largest absolute composite value since the last `take_peak`.
-    peak: f32,
 }
 
 impl MpxEncoder {
     pub fn new(in_rate: u32, fs: u32, params: MpxParams, rds: RdsData) -> MpxEncoder {
         let pre_tau = params.preemph_us;
-        let mut e = MpxEncoder {
+        MpxEncoder {
             fs,
+            tap: None,
             in_rate: in_rate as f64,
             hist: [[0.0; 2]; 4],
             mu: 1.0,
@@ -302,14 +364,8 @@ impl MpxEncoder {
             pre_r: PreEmph::new(pre_tau, fs as f64),
             pre_tau,
             gain: 1.0,
-            p: 0.0,
-            rds_sym: 1.0,
-            peak: 0.0,
-            rds: RdsEncoder::new(rds),
-            params,
-        };
-        e.rds_sym = if e.rds.next_bit() == 1 { 1.0 } else { -1.0 };
-        e
+            comp: Composer::new(fs, params, rds),
+        }
     }
 
     pub fn set_params(&mut self, p: MpxParams) {
@@ -318,11 +374,15 @@ impl MpxEncoder {
             self.pre_r = PreEmph::new(p.preemph_us, self.fs as f64);
             self.pre_tau = p.preemph_us;
         }
-        self.params = p;
+        self.comp.params = p;
+    }
+
+    pub fn set_rds(&mut self, d: RdsData) {
+        self.comp.rds.data = d;
     }
 
     pub fn take_peak(&mut self) -> f32 {
-        std::mem::replace(&mut self.peak, 0.0)
+        self.comp.take_peak()
     }
 
     pub fn input_rate(&self) -> u32 {
@@ -334,8 +394,7 @@ impl MpxEncoder {
         let frames = input.len() / 2;
         out.reserve((frames as f64 / self.step) as usize + 2);
         let mut i = 0usize;
-        let pr = self.params.clone();
-        let pinc = 19_000.0 / self.fs as f64;
+        let limiter = self.comp.params.limiter;
         loop {
             while self.mu >= 1.0 {
                 if i >= frames {
@@ -357,7 +416,7 @@ impl MpxEncoder {
             let (mut l, mut r) = (self.fir_l.push(l0), self.fir_r.push(r0));
             l = self.pre_l.push(l);
             r = self.pre_r.push(r);
-            if pr.limiter {
+            if limiter {
                 let pk = l.abs().max(r.abs());
                 let target = if pk > 1.0 { 1.0 / pk } else { 1.0 };
                 if target < self.gain {
@@ -368,36 +427,51 @@ impl MpxEncoder {
                 l *= self.gain;
                 r *= self.gain;
             }
-            // phase bookkeeping
-            self.p += pinc;
-            if self.p >= 16.0 {
-                self.p -= 16.0;
+            if let Some(t) = self.tap.as_mut() {
+                t.push(l);
+                t.push(r);
             }
-            if self.p < pinc {
-                // a new RDS bit starts exactly every 16 pilot cycles
-                self.rds_sym = if self.rds.next_bit() == 1 { 1.0 } else { -1.0 };
+            out.push(self.comp.push(l, r));
+        }
+    }
+}
+
+// ---------------------------------------------------------------- polyphase interpolator (Compact MPX receiver)
+
+/// Raises the sample rate by an integer factor with a windowed-sinc low-pass, so the images of the audio stay
+/// out of the stereo and RDS bands.
+pub struct Interpolator {
+    factor: usize,
+    /// phases[k][j]: tap j of phase k
+    phases: Vec<Vec<f32>>,
+    hist: Vec<f32>,
+    pos: usize,
+}
+
+impl Interpolator {
+    pub fn new(factor: usize, out_fs: f64, cut_hz: f64, taps_per_phase: usize) -> Interpolator {
+        let taps = factor * taps_per_phase;
+        let proto = Fir::lowpass(cut_hz, out_fs, taps + 1);
+        let mut phases = vec![vec![0.0f32; taps_per_phase]; factor];
+        for (i, &h) in proto.h.iter().take(taps).enumerate() {
+            phases[i % factor][i / factor] = h * factor as f32;
+        }
+        Interpolator { factor, phases, hist: vec![0.0; taps_per_phase * 2], pos: 0 }
+    }
+
+    /// One input sample in, `factor` output samples appended.
+    pub fn push(&mut self, x: f32, out: &mut Vec<f32>) {
+        let n = self.hist.len() / 2;
+        self.pos = if self.pos == 0 { n - 1 } else { self.pos - 1 };
+        self.hist[self.pos] = x;
+        self.hist[self.pos + n] = x;
+        let w = &self.hist[self.pos..self.pos + n];
+        for k in 0..self.factor {
+            let mut acc = 0.0f32;
+            for (a, b) in w.iter().zip(self.phases[k].iter()) {
+                acc += a * b;
             }
-            let th = 2.0 * PI * self.p; // pilot angle (wraps seamlessly: 16 cycles)
-            let m = (l + r) * 0.5;
-            let mut c;
-            if pr.stereo {
-                let s = (l - r) * 0.5;
-                c = pr.audio_level * (m + s * (2.0 * th).sin() as f32) + pr.pilot_level * th.sin() as f32;
-            } else {
-                c = pr.audio_level * m;
-            }
-            if self.rds.data.enabled && pr.rds_level > 0.0 {
-                // biphase symbol: one full sine period per bit, on the 57 kHz carrier
-                let sym = (th / 16.0).sin() as f32 * self.rds_sym;
-                c += pr.rds_level * sym * (3.0 * th).sin() as f32;
-            }
-            c *= pr.output;
-            let c = c.clamp(-1.0, 1.0);
-            let a = c.abs();
-            if a > self.peak {
-                self.peak = a;
-            }
-            out.push(c);
+            out.push(acc);
         }
     }
 }
