@@ -1,0 +1,32 @@
+# On every push to main that contains a NEW version in Cargo.toml:
+#   1. creates the tag vX.Y.Z and its GitHub release (description = the matching section of CHANGELOG.md),
+#   2. starts the "release" workflow for that tag, which builds all editions and attaches them to the release.
+# A push without a version change does nothing (a tag exists only once per version).
+name: auto-tag
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.toml"]
+permissions:
+  contents: write
+  actions: write
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the tag and release, start the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="v$V"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists - nothing to do."
+            exit 0
+          fi
+          awk -v v="$V" '$0 ~ "^## " v "([^0-9.]|$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "RadioMoon MPX $V" > notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "RadioMoon MPX $V" --notes-file notes.md
+          # a tag made with the workflow token does not start other workflows by itself, so start the build explicitly
+          gh workflow run release.yml --ref "$TAG"

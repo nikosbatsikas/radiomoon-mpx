@@ -1,0 +1,5 @@
+target/
+dist/
+stage/
+*.rmbak
+config.json

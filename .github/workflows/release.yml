@@ -1,0 +1,143 @@
+# Builds every edition when a version tag is pushed (auto-tag.yml creates the tag and the release when the version
+# in Cargo.toml changes on main). The packages are attached to that release:
+#   Windows x64/x86/arm64: setup .exe and portable .zip (both programs)
+#   Linux x64/arm64:       transmitter .tar.gz and receiver .tar.gz (arm64 = Raspberry Pi 3/4/5, 64-bit OS)
+#   macOS arm64:           .dmg with both apps
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev
+      - name: Unit tests (FLAC codec, packet handling, RDS)
+        run: cargo test --release --lib
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build setup and portable zip
+        shell: pwsh
+        run: ./build_windows.ps1 -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, arch: x64 }
+          - { os: ubuntu-22.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev
+      - name: Build
+        shell: bash
+        run: |
+          set +e
+          cargo build --release --message-format=short 2>&1 | tee build.log
+          RC=${PIPESTATUS[0]}
+          ERR=$(grep -E ': error' build.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          WARN=$(grep -E ': warning' build.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          [ -n "$ERR" ] && echo "::error title=Compiler errors::$ERR"
+          [ -n "$WARN" ] && echo "::warning title=Compiler warnings::$WARN"
+          exit $RC
+      - name: Packages
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mkdir -p dist RadioMoon-MPX-Receiver RadioMoon-MPX-Transmitter
+          cp target/release/radiomoon-mpx-receiver README.md CHANGELOG.md RadioMoon-MPX-Receiver/
+          cp target/release/radiomoon-mpx-transmitter README.md CHANGELOG.md RadioMoon-MPX-Transmitter/
+          tar czf dist/RadioMoon-MPX-Receiver-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Receiver
+          tar czf dist/RadioMoon-MPX-Transmitter-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Transmitter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: App bundles and dmg
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mkdir -p dist/dmg RadioMoon.iconset
+          for s in 16 32 64 128 256; do sips -z $s $s packaging/icon.png --out RadioMoon.iconset/icon_${s}x${s}.png; done
+          iconutil -c icns RadioMoon.iconset -o RadioMoon.icns
+          for P in "Transmitter:radiomoon-mpx-transmitter" "Receiver:radiomoon-mpx-receiver"; do
+            NAME="RadioMoon MPX ${P%%:*}"; BIN="${P##*:}"; EXE="RadioMoon-MPX-${P%%:*}"
+            APP="dist/dmg/$NAME.app"
+            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+            cp target/release/$BIN "$APP/Contents/MacOS/$EXE"
+            cp RadioMoon.icns "$APP/Contents/Resources/RadioMoon.icns"
+            sed -e "s/@VERSION@/$V/g" -e "s/@NAME@/$NAME/g" -e "s/@EXE@/$EXE/g" -e "s/@ID@/com.radiomoon.mpx.$(echo ${P%%:*} | tr A-Z a-z)/g" packaging/macos/Info.plist.in > "$APP/Contents/Info.plist"
+          done
+          hdiutil create -volname "RadioMoon MPX" -srcfolder dist/dmg -ov -format UDZO dist/RadioMoon-MPX-$V-macos-arm64.dmg
+          rm -rf dist/dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*
+
+  release:
+    needs: [test, windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Check that the tag matches the program version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} does not match Cargo.toml version $V"; exit 1; }
+      - name: Release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          awk -v v="$V" '$0 ~ "^## " v "([^0-9.]|$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "RadioMoon MPX $V" > notes.md
+      - name: Attach the packages to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          for i in $(seq 1 24); do
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && FOUND=1 && break
+            sleep 5
+          done
+          [ -n "$FOUND" ] || { echo "No release for tag $TAG."; exit 1; }
+          gh release upload "$TAG" out/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"

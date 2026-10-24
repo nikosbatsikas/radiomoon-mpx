@@ -1,0 +1,40 @@
+[package]
+name = "radiomoon-mpx"
+version = "1.0.0"
+edition = "2021"
+description = "RadioMoon MPX - FM multiplex transmitter and receiver (stereo, RDS, L24 / lossless FLAC over IP)"
+license = "LicenseRef-RadioMoon"
+build = "build.rs"
+default-run = "radiomoon-mpx-transmitter"
+
+[lib]
+name = "radiomoon_mpx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "radiomoon-mpx-transmitter"
+path = "src/bin/mpx_transmitter.rs"
+
+[[bin]]
+name = "radiomoon-mpx-receiver"
+path = "src/bin/mpx_receiver.rs"
+
+[build-dependencies]
+winres = "0.1"
+
+[dependencies]
+eframe = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.15"
+rand = "0.8"
+ureq = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
