@@ -123,6 +123,8 @@ pub struct RdsDecoder {
     rt: [u8; 64],
     rt_seen: u64,
     rt_ab: Option<bool>,
+    /// Average magnitude of the RDS signal after filtering (see `level`).
+    mag: f64,
     pub info: RdsInfo,
 }
 
@@ -160,6 +162,7 @@ impl RdsDecoder {
             rt: [b' '; 64],
             rt_seen: 0,
             rt_ab: None,
+            mag: 0.0,
             info: RdsInfo { ps: " ".repeat(8), ..RdsInfo::default() },
         }
     }
@@ -185,7 +188,14 @@ impl RdsDecoder {
     }
 
     /// Costas loop: keeps the local 57 kHz exactly on the carrier (sign ambiguity is removed by the differential code).
+    /// Level of the RDS subcarrier (1.0 = 75 kHz deviation), measured from the filtered signal.
+    pub fn level(&self) -> f32 {
+        // average magnitude of the filtered biphase signal -> subcarrier level (measured with the generator)
+        (self.mag * 3.12) as f32
+    }
+
     fn costas(&mut self, i: f32, q: f32) {
+        self.mag += (((i * i + q * q) as f64).sqrt() - self.mag) * 0.0005;
         let p = (i * i + q * q) as f64 + 1e-12;
         let err = (i * q) as f64 / p; // ~ sin(2 * phase error) / 2
         // loop about 15 Hz wide at 24 kHz

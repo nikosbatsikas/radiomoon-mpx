@@ -480,7 +480,8 @@ impl MpxHandle {
     }
 
     /// `rx` delivers a ready composite signal (MPX) at 192 kHz, e.g. from a sound card input: it is sent to the
-    /// outputs as it is (no generator, so the Signal and RDS settings are not used; Compact MPX is not possible).
+    /// outputs as it is (no generator, so the Signal and RDS settings are not used). For Compact MPX outputs it is
+    /// decoded first (stereo audio, pilot and RDS levels, RDS data), and the receiver rebuilds the composite.
     pub fn start_input(cfg: &MpxCfg, rx: Receiver<Vec<f32>>) -> MpxHandle {
         Self::start_with(cfg, rx, true)
     }
@@ -502,10 +503,7 @@ impl MpxHandle {
         if cfg.ip_on {
             for t in cfg.targets.iter().filter(|t| t.enabled && !t.host.trim().is_empty()) {
                 let link: Link = Arc::new(Mutex::new(LinkStat { text: "Starting...".into(), ..LinkStat::default() }));
-                if t.is_compact() && passthrough {
-                    // Compact MPX carries the audio, which a ready composite signal does not give
-                    link_set(&link, |l| l.text = "Compact MPX is not possible with an MPX input: choose PCM or FLAC".into());
-                } else if t.is_compact() {
+                if t.is_compact() {
                     // Compact MPX: gets the processed stereo audio (interleaved, 192 kHz) instead of the composite
                     let q = Queue::new(120);
                     compact_thread(t.clone(), q.clone(), params.clone(), stop.clone(), link.clone());
@@ -528,9 +526,12 @@ impl MpxHandle {
         std::thread::spawn(move || {
             let (p0, r0) = pa.lock().map(|g| g.clone()).unwrap_or_default();
             let mut enc = MpxEncoder::new(in_rate, FS, p0, r0);
-            if !cqueues.is_empty() {
+            if !cqueues.is_empty() && !passthrough {
                 enc.tap = Some(Vec::new());
             }
+            // MPX input with Compact outputs: decode the composite (stereo audio, pilot and RDS levels, RDS data)
+            // so Compact MPX can carry it; the receiver rebuilds the composite from that
+            let mut demux = (passthrough && !cqueues.is_empty()).then(|| (crate::demux::StereoDecoder::new(FS), crate::rdsdec::RdsDecoder::new(FS), Vec::<f32>::new()));
             let mut out: Vec<f32> = Vec::new();
             let mut an = crate::mpxscope::Analyzer::new();
             let mut secs_at = Instant::now();
@@ -543,6 +544,22 @@ impl MpxHandle {
                         an.push(&out, &scope2);
                         for q in &queues {
                             q.push(&out);
+                        }
+                        if let Some((st_dec, rds_dec, lr)) = demux.as_mut() {
+                            lr.clear();
+                            st_dec.push(&out, lr);
+                            rds_dec.push(&out);
+                            for q in &cqueues {
+                                q.push(lr);
+                            }
+                            // what the receiver needs to rebuild this composite: the audio is already at the
+                            // composite's scale (audio level 1), pilot and RDS at their measured levels
+                            let i = &rds_dec.info;
+                            let p = MpxParams { stereo: st_dec.stereo(), audio_level: 1.0, pilot_level: st_dec.pilot_level().clamp(0.0, 0.2), rds_level: if i.synced { rds_dec.level().clamp(0.0, 0.15) } else { 0.0 }, preemph_us: 0.0, limiter: false, output: 1.0 };
+                            let r = RdsData { enabled: i.synced, pi: i.pi.unwrap_or(0), ps: i.ps.clone(), rt: i.rt.clone(), pty: i.pty.unwrap_or(0), tp: i.tp, ta: i.ta, music: i.music };
+                            if let Ok(mut g) = pa.lock() {
+                                *g = (p, r);
+                            }
                         }
                         let p = out.iter().fold(0f32, |m, v| m.max(v.abs()));
                         let old = f32::from_bits(pk.load(Ordering::Relaxed));

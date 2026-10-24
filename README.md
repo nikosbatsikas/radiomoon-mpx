@@ -23,7 +23,7 @@ Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is 
 
 ## MPX input
 
-The Transmitter can also send a ready composite signal: Audio source > **MPX input (192 kHz)**. Choose a sound card input that records at 192 kHz and the channel (left or right) that carries the MPX, e.g. from the MPX output of a broadcast processor. The signal is sent as it is, so the Signal and RDS settings are not used, and the IP outputs need a composite format (PCM or FLAC; Compact MPX carries audio and cannot be used).
+The Transmitter can also send a ready composite signal: Audio source > **MPX input (192 kHz)**. Choose a sound card input that records at 192 kHz and the channel (left or right) that carries the MPX, e.g. from the MPX output of a broadcast processor. PCM and FLAC outputs send the signal as it is (an exact copy). Compact MPX outputs decode it first - stereo audio, pilot and RDS levels, RDS station name, RadioText, PI, PTY and flags - and the receiver rebuilds the composite from that (other RDS services such as clock time or AF lists are not carried). The Signal and RDS settings are not used with an MPX input.
 
 ## Putting RadioMoon on air
 
