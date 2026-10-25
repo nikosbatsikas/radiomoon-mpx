@@ -99,8 +99,10 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh packaging/headless/ci-alpine-test.sh > alpine.log 2>&1
+          docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh packaging/headless/build-alpine.sh > alpine.log 2>&1
           RC=$?
+          # the install test in a fresh container: no compiler or build libraries, like a new Alpine installation
+          [ $RC -eq 0 ] && { docker run --rm -v "$PWD":/src:ro -w /src alpine:3.20 sh packaging/headless/ci-alpine-test.sh >> alpine.log 2>&1; RC=$?; }
           cat alpine.log
           if [ $RC -ne 0 ]; then
             T=$(grep -v "^\s*Compiling\|^\s*Downloaded\|^\s*Downloading" alpine.log | tail -70 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')

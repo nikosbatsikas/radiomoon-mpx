@@ -88,7 +88,8 @@ fi
 # ---------------------------------------------------------------- packages
 say "System: $LIBC ($PKG, $INIT), $ARCH"
 if [ "$PKG" = apk ]; then
-  apk add --no-cache alsa-lib alsa-utils ca-certificates >/dev/null
+  # libgcc: the GCC runtime the programs are linked with (not in a minimal Alpine)
+  apk add --no-cache libgcc alsa-lib alsa-utils ca-certificates >/dev/null
 elif [ "$PKG" = dnf ] || [ "$PKG" = yum ]; then
   "$PKG" install -y -q alsa-lib alsa-utils ca-certificates wget tar gzip >/dev/null
 else

@@ -1,11 +1,10 @@
 #!/bin/sh
-# CI: builds the headless editions on Alpine, then installs them with the installer under OpenRC and checks the
-# web interfaces (login, settings, status).
+# CI: installs the headless editions (built before by build-alpine.sh) with the installer under OpenRC on a CLEAN
+# Alpine (nothing but the base system, as on a new installation) and checks the web interfaces.
 set -e
-sh packaging/headless/build-alpine.sh
 mkdir -p /tmp/pkg
 cp target/alpine/release/radiomoon-mpx-txd target/alpine/release/radiomoon-mpx-rxd packaging/headless/install.sh /tmp/pkg/
-apk add --no-cache openrc curl >/dev/null
+apk add --no-cache openrc curl >/dev/null   # (curl only for this test)
 # OpenRC in a container: no real boot, so mark the system as a container and enter the default runlevel
 sed -i 's/^#\?rc_sys=.*/rc_sys="docker"/' /etc/rc.conf
 mkdir -p /run/openrc && touch /run/openrc/softlevel
