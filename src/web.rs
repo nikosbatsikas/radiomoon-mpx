@@ -29,6 +29,32 @@ pub trait App: Send + Sync + 'static {
     fn save_settings(&self, json: &str) -> Result<(), String>;
     /// Sound devices, serial ports ... for the choice lists of the page.
     fn devices_json(&self) -> String;
+    /// The program icon (PNG), for the page header, the About box and the browser tab.
+    fn icon(&self) -> &'static [u8];
+}
+
+/// When the program started (for the About box).
+fn started() -> &'static (Instant, u64) {
+    static S: std::sync::OnceLock<(Instant, u64)> = std::sync::OnceLock::new();
+    S.get_or_init(|| (Instant::now(), crate::status::now_ms()))
+}
+
+fn host_name() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .unwrap_or_default()
+}
+
+/// The operating system, e.g. "Alpine Linux v3.20" (from /etc/os-release), else the platform name.
+fn os_name() -> String {
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|t| t.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string())))
+        .unwrap_or_else(|| std::env::consts::OS.to_string())
 }
 
 // ---------------------------------------------------------------- login
@@ -101,6 +127,7 @@ const SESSION: Duration = Duration::from_secs(12 * 3600);
 pub fn start(listen: &str, app: Arc<dyn App>, stop: Arc<AtomicBool>) -> Result<(), String> {
     let l = TcpListener::bind(listen).map_err(|e| format!("web interface: cannot listen on {listen}: {e}"))?;
     let _ = l.set_nonblocking(true);
+    let _ = started();
     let st = Arc::new(State { login: Mutex::new(load_login()), sessions: Mutex::new(HashMap::new()), fails: Mutex::new(HashMap::new()) });
     std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
@@ -172,8 +199,9 @@ fn respond(s: &mut TcpStream, code: u16, ctype: &str, body: &[u8], extra: &str) 
         _ => "Error",
     };
     let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:\r\nConnection: close\r\n{extra}\r\n",
-        body.len()
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n{}X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:\r\nConnection: close\r\n{extra}\r\n",
+        body.len(),
+        if extra.contains("Cache-Control") { "" } else { "Cache-Control: no-store\r\n" }
     );
     s.write_all(head.as_bytes())?;
     s.write_all(body)?;
@@ -210,7 +238,7 @@ fn handle(mut s: TcpStream, ip: IpAddr, app: &dyn App, st: &State) -> std::io::R
     }
     match (req.method.as_str(), path.as_str()) {
         ("GET", "/") | ("GET", "/index.html") => respond(&mut s, 200, "text/html; charset=utf-8", app.page().as_bytes(), ""),
-        ("GET", "/favicon.ico") => respond(&mut s, 404, "text/plain", b"", ""),
+        ("GET", "/favicon.ico") | ("GET", "/logo.png") => respond(&mut s, 200, "image/png", app.icon(), "Cache-Control: max-age=86400\r\n"),
         ("POST", "/api/login") => {
             // lock-out after 10 failures from one address
             if let Ok(f) = st.fails.lock() {
@@ -258,7 +286,22 @@ fn handle(mut s: TcpStream, ip: IpAddr, app: &dyn App, st: &State) -> std::io::R
         _ if path.starts_with("/api/") && !logged_in(&req, st) => json(&mut s, 401, r#"{"error":"login"}"#),
         ("GET", "/api/me") => {
             let user = st.login.lock().ok().and_then(|g| g.clone()).map(|l| l.user).unwrap_or_default();
-            json(&mut s, 200, &serde_json::json!({ "user": user, "version": env!("CARGO_PKG_VERSION") }).to_string())
+            let (t0, since) = started();
+            json(
+                &mut s,
+                200,
+                &serde_json::json!({
+                    "user": user,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "os": os_name(),
+                    "arch": std::env::consts::ARCH,
+                    "host": host_name(),
+                    "data": crate::status::shared_dir().display().to_string(),
+                    "uptime_s": t0.elapsed().as_secs(),
+                    "started_ms": since,
+                })
+                .to_string(),
+            )
         }
         ("GET", "/api/status") => json(&mut s, 200, &app.status_json()),
         ("GET", "/api/settings") => json(&mut s, 200, &app.settings_json()),

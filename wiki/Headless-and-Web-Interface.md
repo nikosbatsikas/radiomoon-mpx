@@ -21,6 +21,7 @@ The installer adds the ALSA packages, a service user `radiomoon` (groups audio, 
 - **Log** (Receiver): the [[Receiver Log]] in local time.
 - **Settings tabs:** *Save and apply* — outputs and sources restart, levels and RDS change at once.
 - **Login:** change user and password.
+- **About** (button in the header): version, features, links to the project / wiki / releases, and this computer (name, system, running time, data folder).
 
 Security: login with a password (PBKDF2), session cookie (HttpOnly, SameSite=Strict), every change needs a special request header (no cross-site requests), 10 wrong passwords lock an address for 5 minutes. The page is **plain HTTP**: use it in your own network or through a VPN / SSH tunnel (`ssh -L 8081:localhost:8081 pi@site`), not open to the internet.
 

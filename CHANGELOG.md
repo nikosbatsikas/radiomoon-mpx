@@ -2,6 +2,9 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.1
+- **Web interface: About.** An *About* button in the header opens the About box, as in the window programs: program logo, version, what the program does, the authors, links to the project, the wiki and the releases, and - after login - this system: computer name, operating system and processor, how long the program has been running and its data folder. The program logo is also in the header and in the browser tab.
+
 ## 1.12.0
 - **RDS: Extended Country Code (ECC).** New field *ECC* next to the PI code (Transmitter window and web page): the Transmitter sends group 1A with the ECC about every 3.5 s. With the first digit of the PI it names the country world-wide - e.g. Greece E1 (PI 1xxx), Cyprus E2 (PI 2xxx) - as cars with hybrid radio (RadioDNS) need it to find the station's logo and information. Empty = not sent (as before).
 - The Receiver decodes the ECC and shows it next to the PI (window and web page); Compact MPX carries it, and an MPX input passes it on.

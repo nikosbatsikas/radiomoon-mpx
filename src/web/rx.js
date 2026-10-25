@@ -1,4 +1,12 @@
 /* RadioMoon MPX Receiver - web page */
+const ABOUT={name:"RadioMoon MPX Receiver",tagline:"Receives the MPX over IP and plays it into the exciter",features:[
+ "UDP (RTP) or TCP, format detected automatically: L16 / L20 / L24, FLAC and Compact MPX (FLAC / Opus)",
+ "Lost packets hidden without a pilot or RDS phase jump; FEC restores lost packets",
+ "Encrypted streams (password) and a list of allowed senders",
+ "Backup MPX from a sound card input when the stream stops",
+ "RDS display: station name, RadioText, PI, ECC, PTY, AF, clock time",
+ "SFN playout with GPS or PTP (IEEE 1588v2) time; event log",
+ "Headless with this web interface (Linux, Raspberry Pi, Alpine), or with its window, as a service"]};
 document.title="RadioMoon MPX Receiver";$("#title").textContent="RadioMoon MPX Receiver";
 const TABS0=[["status","Status"],["log","Log"],["input","Input & protection"],["output","Output"],["sfn","SFN"],["backup","Backup"],["account","Login"]];
 function fmtName(st){const b=st.bits||24;if(st.compact===1)return "Compact MPX (FLAC)";if(st.compact===2)return "Compact MPX (Opus)";return st.flac?"FLAC "+b+"-bit":"L"+b;}

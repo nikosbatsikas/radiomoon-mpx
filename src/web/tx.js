@@ -1,4 +1,11 @@
 /* RadioMoon MPX Transmitter - web page */
+const ABOUT={name:"RadioMoon MPX Transmitter",tagline:"FM multiplex generator with RDS, sent to sound cards and over IP",features:[
+ "Stereo MPX with 19 kHz pilot and RDS: long PS, RadioText from the song, AF list, clock time with daylight saving, ECC",
+ "Internet stream, sound input, AES67 / Dante or a ready MPX input (192 kHz) as the source",
+ "Any number of IP receivers: UDP or TCP, L16 / L20 / L24, FLAC lossless or Compact MPX (FLAC / Opus)",
+ "Protection: encryption with a password, FEC with burst protection; QoS (DSCP)",
+ "SFN time stamps from GPS or PTP (IEEE 1588v2)",
+ "Headless with this web interface (Linux, Raspberry Pi, Alpine), or with its window, as a service or a CLAP plug-in"]};
 document.title="RadioMoon MPX Transmitter";$("#title").textContent="RadioMoon MPX Transmitter";
 const TABS0=[["status","Status"],["source","Audio source"],["ip","IP output"],["card","Sound card output"],["signal","Signal"],["rds","RDS"],["sfn","SFN"],["account","Login"]];
 function pills(){const p=$("#pills");p.innerHTML="";if(!ST){p.append(el("span",{class:"pill",style:"color:"+C.dim},"STOPPED"));return;}
