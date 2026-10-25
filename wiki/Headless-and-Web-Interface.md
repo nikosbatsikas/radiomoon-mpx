@@ -13,6 +13,18 @@ wget -qO- https://raw.githubusercontent.com/nikosbatsikas/radiomoon-mpx/main/pac
 ```
 (`transmitter`, `both`, or `uninstall`; on Alpine run it as root without `sudo`). Or download `RadioMoon-MPX-Headless-linux-<arch>.tar.gz`, unpack and run `sudo sh install.sh receiver`.
 
+Step by step (Debian / Ubuntu / Raspberry Pi OS):
+1. Log in on the server (directly or `ssh user@server`).
+2. Run the command above. It shows `==> System: linux (apt, systemd), x86_64`, installs the sound libraries, downloads the package, and asks:
+   ```
+   Password for the web interface (user "admin", at least 8 characters):
+   Again:
+   ```
+3. At the end it prints the address of the page, e.g. `Receiver: http://192.168.1.20:8081`. Open it in a browser on any computer of the network and log in ([[Web Interface]]).
+4. In the page: *Output* → the 192 kHz card, *Input* → port / password, **Save and apply**.
+
+![Web page of the Receiver](images/screens/web-receiver-status.png)
+
 The installer adds the ALSA packages, a service user `radiomoon` (groups audio, dialout), a **systemd** or **OpenRC** service that restarts by itself, and asks for the **web password** (user `admin`). Options: `RM_PASSWORD`, `RM_USER`, `RM_TX_PORT`, `RM_RX_PORT`, `RM_VERSION` (environment).
 
 ## The web page
