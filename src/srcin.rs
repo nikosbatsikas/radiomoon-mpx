@@ -432,7 +432,7 @@ fn mpx_capture_thread(device: String, channel: usize, sh: Arc<Shared>, tx: std::
     let ch = cfg.channels.max(1) as usize;
     let pick = channel.min(ch - 1);
     let (gain, sh2) = (sh.gain, sh.clone());
-    let mut handle = move |d: &mut dyn Iterator<Item = f32>| {
+    let handle = move |d: &mut dyn Iterator<Item = f32>| {
         let mut blk: Vec<f32> = Vec::with_capacity(4096);
         let mut pk = 0f32;
         for (i, v) in d.enumerate() {

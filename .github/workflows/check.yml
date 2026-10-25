@@ -61,6 +61,20 @@ jobs:
           target/release/radiomoon-mpx-rxd --version
       - name: Unit tests without the windows
         run: cargo test --release --lib --no-default-features
+      - name: Install with the installer (systemd) and check the web interfaces
+        shell: bash
+        run: |
+          mkdir -p pkg && cp target/release/radiomoon-mpx-txd target/release/radiomoon-mpx-rxd packaging/headless/install.sh pkg/
+          sudo RM_PASSWORD=secret-pass-1 sh pkg/install.sh both
+          sleep 3
+          systemctl --no-pager status radiomoon-mpx-rxd radiomoon-mpx-txd | head -30 || true
+          curl -sf -o /dev/null http://127.0.0.1:8081/
+          curl -sf -c cj -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8081/api/login | grep -q ok
+          curl -sf -b cj http://127.0.0.1:8081/api/status | head -c 200; echo
+          curl -sf -c cj2 -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8080/api/login | grep -q ok
+          curl -sf -b cj2 http://127.0.0.1:8080/api/status | head -c 200; echo
+          sudo journalctl -u radiomoon-mpx-rxd --no-pager | tail -5
+          sudo sh pkg/install.sh uninstall
 
   alpine:
     runs-on: ubuntu-latest
