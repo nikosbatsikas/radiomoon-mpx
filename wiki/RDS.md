@@ -8,3 +8,5 @@ Transmitter, RDS tab:
 - **Clock time (CT):** once a minute, with the local offset; *Daylight saving* Automatic (Europe), Automatic (USA / Canada) or Off. With automatic, set the winter offset (Greece +2).
 
 The Receiver shows the decoded RDS; the station name only when it came complete.
+
+Logos in cars (Android Auto, CarPlay, hybrid radio) do not come from RDS: see [[Station Logos in Cars]].

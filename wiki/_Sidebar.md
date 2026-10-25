@@ -8,6 +8,7 @@
 - [[Protection]]
 - [[SFN]]
 - [[RDS]]
+- [[Station Logos in Cars]]
 - [[Backup Source]]
 - [[Receiver Log]]
 - [[CLAP Plug-in]]
