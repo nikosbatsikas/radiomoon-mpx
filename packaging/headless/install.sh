@@ -189,7 +189,8 @@ EOF
     chmod 755 "/etc/init.d/$n"
     rc-update add "$n" default >/dev/null
     [ -e /etc/init.d/alsasound ] && rc-update add alsasound boot >/dev/null 2>&1 || true
-    if ! rc-service "$n" restart; then
+    if rc-service "$n" status >/dev/null 2>&1; then act=restart; else act=start; fi
+    if ! rc-service "$n" "$act"; then
       echo "Could not start $n. Its log ($LOGS/$s.log):" >&2
       tail -n 20 "$LOGS/$s.log" >&2 2>/dev/null || true
       exit 1
