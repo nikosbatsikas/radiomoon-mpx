@@ -1,0 +1,85 @@
+# Takes screenshots of both programs (every tab) and of the web pages, with demo settings (Transmitter -> Receiver on
+# one machine, Compact Opus with SFN, no sound card), and puts them into the wiki (images/screens).
+name: wiki-screenshots
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**", "packaging/wiki/**"]
+permissions:
+  contents: write
+jobs:
+  shots:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: shots
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils
+      - name: Build
+        run: cargo build --release --bin radiomoon-mpx-transmitter --bin radiomoon-mpx-receiver --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+      - name: Screenshots of the windows
+        shell: bash
+        run: |
+          set -x
+          mkdir -p shots data
+          export RADIOMOON_DATA=$PWD/data
+          cp packaging/wiki/demo-transmitter.json data/mpx-transmitter.json
+          cp packaging/wiki/demo-receiver.json data/mpx-receiver.json
+          Xvfb :99 -screen 0 1400x1000x24 & sleep 2
+          export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1
+          T=target/release/radiomoon-mpx-transmitter; R=target/release/radiomoon-mpx-receiver
+          grab() { # $1 = window title, $2 = file
+            W=$(xdotool search --sync --onlyvisible --name "^$1\$" | head -n1)
+            import -window "$W" "shots/$2.png" || true
+          }
+          # the receiver, then the transmitter keep running while the other one goes through its tabs
+          RM_TAB=rds $R & RPID=$!
+          sleep 2
+          for TAB in source ip card signal rds sfn service; do
+            RM_TAB=$TAB $T & TPID=$!
+            sleep 12
+            grab "RadioMoon MPX Transmitter" "transmitter-$TAB"
+            kill $TPID; sleep 1
+          done
+          RM_TAB=ip $T & TPID=$!
+          kill $RPID; sleep 1
+          for TAB in rds input output sfn log service; do
+            RM_TAB=$TAB $R & RPID=$!
+            if [ "$TAB" = sfn ] || [ "$TAB" = log ]; then sleep 40; else sleep 15; fi
+            grab "RadioMoon MPX Receiver" "receiver-$TAB"
+            kill $RPID; sleep 1
+          done
+          kill $TPID || true
+          ls -l shots
+      - name: Screenshots of the web pages
+        shell: bash
+        run: |
+          export RADIOMOON_DATA=$PWD/data
+          echo "wiki-demo-pass" | target/release/radiomoon-mpx-txd --data data --set-login admin
+          target/release/radiomoon-mpx-rxd --data data --listen 127.0.0.1:8081 > rxd.log 2>&1 &
+          target/release/radiomoon-mpx-txd --data data --listen 127.0.0.1:8080 > txd.log 2>&1 &
+          pip install -q playwright && python -m playwright install --with-deps chromium > /dev/null
+          sleep 30
+          python packaging/wiki/web_shots.py shots wiki-demo-pass
+          ls -l shots
+      - name: Put the screenshots into the wiki
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" w
+          mkdir -p w/images/screens
+          cp shots/*.png w/images/screens/
+          cd w
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "screenshots unchanged"; exit 0; fi
+          git commit -qm "Screenshots from ${GITHUB_SHA::7}"
+          git push -q
+          echo "::notice title=screenshots::$(ls ../shots | tr '\n' ' ')"

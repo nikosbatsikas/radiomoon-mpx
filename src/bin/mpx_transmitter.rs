@@ -883,7 +883,16 @@ fn main() -> eframe::Result<()> {
                 last_now: String::new(),
                 first: true,
                 pending: false,
-                tab: Tab::Source,
+                // RM_TAB opens another tab first (used for the screenshots of the wiki)
+                tab: match std::env::var("RM_TAB").unwrap_or_default().as_str() {
+                    "ip" => Tab::Ip,
+                    "card" => Tab::Card,
+                    "signal" => Tab::Signal,
+                    "rds" => Tab::Rds,
+                    "sfn" => Tab::Sfn,
+                    "service" => Tab::Service,
+                    _ => Tab::Source,
+                },
                 host,
                 svc: None,
                 svc_read: Instant::now(),

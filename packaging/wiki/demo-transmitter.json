@@ -1,0 +1,18 @@
+{
+  "kind": "stream",
+  "url": "",
+  "gain_db": 0.0,
+  "close_to_tray": false,
+  "fit_window": true,
+  "mpx": {
+    "autostart": true, "stereo": true, "card_on": false, "ip_on": true, "targets_ready": true,
+    "targets": [
+      { "enabled": true, "name": "Site Lefkada (WiFi)", "host": "127.0.0.1", "port": 5004, "proto": "udp", "codec": "copus", "bits": 24, "dscp": 46, "opus_kbps": 256, "password": "demo-password", "fec": 5, "fec_burst": 2 },
+      { "enabled": true, "name": "Site Kefalonia (fibre)", "host": "127.0.0.1", "port": 5006, "proto": "udp", "codec": "flac", "bits": 24, "dscp": 46, "opus_kbps": 256, "password": "", "fec": 0, "fec_burst": 1 }
+    ],
+    "sfn_on": true,
+    "rds_on": true, "pi": "1234", "ecc": "E1", "ps": "RADIO MOON 95.7", "ps_mode": "pages", "ps_interval": 3.0,
+    "rt": "RadioMoon MPX - wiki demo", "rt_from_playlist": false, "pty": 10, "music": true,
+    "af": "95.7, 101.5, 105.0", "ct_on": true, "ct_offset_h": 2.0, "ct_dst": "eu"
+  }
+}

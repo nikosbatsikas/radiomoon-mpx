@@ -1,0 +1,7 @@
+{
+  "proto": "udp", "port": 5004, "device": "No sound card (test output)", "buffer_ms": 250,
+  "autostart": true, "close_to_tray": false, "fit_window": true,
+  "sfn_on": true, "sfn_delay_ms": 1500.0, "sfn_correction_us": 0.0,
+  "password": "demo-password", "allow": "127.0.0.0/8",
+  "backup": { "on": false, "device": "", "channel": 0, "gain_db": 0.0, "timeout_ms": 1000, "return_s": 5.0, "on_silence": false }
+}

@@ -698,7 +698,15 @@ fn main() -> eframe::Result<()> {
                 about_tex: None,
                 logo_tex: None,
                 fit_last: 0.0,
-                tab: Tab::Rds,
+                // RM_TAB opens another tab first (used for the screenshots of the wiki)
+                tab: match std::env::var("RM_TAB").unwrap_or_default().as_str() {
+                    "input" => Tab::Input,
+                    "output" => Tab::Output,
+                    "sfn" => Tab::Sfn,
+                    "log" => Tab::Log,
+                    "service" => Tab::Service,
+                    _ => Tab::Rds,
+                },
                 ports: radiomoon_mpx::clock::serial_ports(),
             }))
         }),

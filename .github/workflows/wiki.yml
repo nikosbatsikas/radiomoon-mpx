@@ -22,7 +22,8 @@ jobs:
             echo "::warning title=Wiki not created yet::Open the Wiki tab of the repository, create the first page and save it once, then run this workflow again (Actions > wiki > Run workflow)."
             exit 0
           fi
-          rsync -a --delete --exclude .git wiki/ w/
+          # images/screens is made by the wiki-screenshots workflow: kept
+          rsync -a --delete --exclude .git --exclude images/screens wiki/ w/
           cd w
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
