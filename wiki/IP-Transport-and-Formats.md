@@ -13,6 +13,6 @@
 
 **Compact MPX** is like μMPX but for RadioMoon only (not compatible with Telos / Omnia μMPX): the processed audio plus levels and RDS; the receiver uses the same stereo encoder and RDS generator. Use PCM / FLAC when the exact composite must arrive (e.g. after an external composite clipper).
 
-**QoS:** DSCP EF (46, default), AF41 (34), CS5, CS6, off, or 0–63. Windows needs a policy-based QoS rule for the program to mark packets.
+**QoS:** DSCP EF (46, default), AF41 (34), CS5, CS6, off, or 0–63. Windows needs a policy-based QoS rule for the program to mark packets: see [[QoS on Windows]].
 
 **Ports / firewall:** open the chosen UDP or TCP port at the Receiver (default 5004).
