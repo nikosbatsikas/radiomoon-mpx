@@ -138,8 +138,9 @@ impl Tracker {
                 self.sfn_locked = Some(s.locked);
             }
         }
-        // the sound card (its state text)
-        if v.card != self.card {
+        // the sound card: only a change of its state, not of the numbers in its text (buffer ms, underruns ...)
+        let card_kind = |t: &str| t.chars().filter(|c| !c.is_ascii_digit()).collect::<String>();
+        if card_kind(&v.card) != card_kind(&self.card) {
             self.card = v.card.clone();
             if !v.card.is_empty() {
                 let bad = ["error", "not", "fail", "no "].iter().any(|w| v.card.to_lowercase().contains(w));
@@ -242,6 +243,15 @@ mod tests {
         assert!(texts.iter().any(|t| t.starts_with("7 packets lost (10 ms concealed)")), "{texts:?}");
         assert_eq!(texts.iter().filter(|t| t.starts_with("Stream lost")).count(), 1, "{texts:?}");
         assert!(texts.last().unwrap().contains("after 4 s without stream"), "{texts:?}");
+        // the numbers in the sound card's text are not events
+        let n = log.len();
+        let mut t = 2_000_000u64;
+        for ms in [4919, 4913, 4925, 4907] {
+            v.card = format!("Sound card: 192 kHz, SFN playout, buffer {ms} ms");
+            log.extend(tr.observe(&v, t));
+            t += 500;
+        }
+        assert_eq!(log.len() - n, 1, "{:?}", &log[n..]);
         assert_eq!(time_text(1_761_378_792_000, 7200), "25.10.2025 09:53:12");
     }
 }

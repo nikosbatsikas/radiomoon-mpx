@@ -2,6 +2,12 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.3
+- **SFN: no more locking / unlocking.** In 1.12.2 two control loops (one smoothing the sound card's timing, one setting the playout rate) worked against each other: the rate swung by tens of ppm and the lock came and went every 10 - 40 seconds, more with FLAC and Opus (more processor load). Now one control loop does both: it locks in about 3 seconds, then narrows step by step (0.5 -> 0.1 -> 0.02 -> 0.006 Hz) to average out the jitter of the card's callbacks. The lock limits follow how exactly the error can be measured.
+- **A busy computer no longer restarts the playout:** a single late or early callback is not used; the playout starts anew only when it stays more than 20 ms off for a quarter of a second.
+- Tested: 12 minutes with ±1 ms callback jitter and a card 30 ppm fast: locked after 3.3 s, never unlocked, within 48 µs; 2 minutes with callbacks 15 - 40 ms late every 7 s: no restart, no unlock. All formats (L24, FLAC, Compact FLAC / Opus) end to end on one computer: no restarts any more (before: 9 - 31 in 45 s).
+- **Log:** the sound card is logged only when its state changes, not every time its buffer number changes (the log was flooded with "Sound card: 192 kHz, SFN playout, buffer ... ms").
+
 ## 1.12.2
 - **SFN: steady lock with real sound cards.** The playout was locking and unlocking every few seconds: it took the time of each sound card callback as it came, and real drivers (PipeWire, PulseAudio, USB) call back with a jitter of a millisecond or more. A delay-locked loop now smooths the card's timing (wide at the start, then narrowing to 0.02 Hz, following the card's own clock rate), and the lock has a hysteresis (locked within 50 µs, unlocked only beyond 200 µs). Tested: ±1 ms callback jitter stays locked within 25 µs; even ±4 ms stays locked (within about 120 µs) without a restart. New readout *Card jitter* in the SFN tab.
 - **SFN: clear state when nothing plays.** When the sound card cannot be opened (e.g. "does not support 192 kHz output"), the SFN state now says *Not playing* with the reason, instead of staying on "Waiting for time stamps" (the playout only runs while a card plays).
