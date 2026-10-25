@@ -81,7 +81,7 @@ jobs:
         run: |
           V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           docker run --rm -v "$PWD":/src -w /src almalinux:8 sh packaging/headless/build-glibc.sh
-          sudo chown -R $(id -u) target/glibc
+          sudo chown -R $(id -u) target
           D=RadioMoon-MPX-Headless-$V
           mkdir -p $D
           cp target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd packaging/headless/install.sh packaging/headless/README.txt CHANGELOG.md $D/

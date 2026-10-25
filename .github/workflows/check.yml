@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          sudo chown -R $(id -u) target/glibc
+          sudo chown -R $(id -u) target
           cat > runtest.sh <<'EOF'
           (command -v dnf >/dev/null && dnf install -y -q alsa-lib >/dev/null 2>&1) || (apt-get update -qq >/dev/null 2>&1 && (apt-get install -y -qq libasound2 >/dev/null 2>&1 || apt-get install -y -qq libasound2t64 >/dev/null 2>&1))
           /b/radiomoon-mpx-rxd --version || exit 1
