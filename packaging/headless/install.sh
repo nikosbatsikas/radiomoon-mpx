@@ -66,6 +66,7 @@ stop_service() { # $1 = txd | rxd
   else
     systemctl stop "$n" >/dev/null 2>&1 || true
   fi
+  return 0
 }
 
 # ---------------------------------------------------------------- uninstall
@@ -116,7 +117,7 @@ if ! id "$SVCUSER" >/dev/null 2>&1; then
   else useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin --gid audio "$SVCUSER"; fi
 fi
 for g in audio dialout; do
-  if getent group "$g" >/dev/null 2>&1; then
+  if grep -q "^$g:" /etc/group; then
     if [ "$PKG" = apk ]; then addgroup "$SVCUSER" "$g" >/dev/null 2>&1 || true; else usermod -aG "$g" "$SVCUSER" || true; fi
   fi
 done
