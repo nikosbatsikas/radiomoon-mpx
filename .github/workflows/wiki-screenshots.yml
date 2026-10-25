@@ -39,7 +39,8 @@ jobs:
           mkdir -p demo
           ffmpeg -loglevel error -f lavfi -i "anoisesrc=color=pink:amplitude=0.25:d=900" -f lavfi -i "sine=f=220:d=900" -f lavfi -i "sine=f=330:d=900" \
             -filter_complex "[0][1]amix=inputs=2[l];[0][2]amix=inputs=2[r];[l][r]join=inputs=2:channel_layout=stereo,volume=0.8[a]" -map "[a]" -ar 44100 -b:a 192k demo/demo.mp3
-          (cd demo && python3 -m http.server 8000 > ../logs/http.log 2>&1 &)
+          # served in real time (like a radio stream), one listener at a time, again for every new connection
+          (while true; do ffmpeg -loglevel error -re -stream_loop -1 -i demo/demo.mp3 -c copy -f mp3 -listen 1 http://127.0.0.1:8000/demo.mp3; done > logs/http.log 2>&1 &)
           sleep 1
           T=target/release/radiomoon-mpx-transmitter; R=target/release/radiomoon-mpx-receiver
           grab() { # $1 = window title, $2 = file
@@ -75,7 +76,6 @@ jobs:
           target/release/radiomoon-mpx-rxd --data data --listen 127.0.0.1:8081 > rxd.log 2>&1 &
           target/release/radiomoon-mpx-txd --data data --listen 127.0.0.1:8080 > txd.log 2>&1 &
           pip install -q playwright && python -m playwright install --with-deps chromium > /dev/null
-          (cd demo && python3 -m http.server 8000 > /dev/null 2>&1 &)
           sleep 60
           python packaging/wiki/web_shots.py shots wiki-demo-pass
           ls -l shots
