@@ -58,6 +58,14 @@ The time stamp is an RTP header extension (profile 0x524D, 8 bytes, ns since 197
 
 Enable RadioMoon's internet broadcast (Icecast or Shoutcast) and set the MPX Transmitter's source to **Internet stream** with that URL. RadioMoon sends the title of every song to the server, and the transmitter turns it into the RDS RadioText (*RadioText from the song*). A sound input fed from RadioMoon's output works too, with a fixed RadioText.
 
+## Protection of the stream
+
+Every IP output of the Transmitter (each receiver in the IP tab) has its own protection settings; the Receiver sets its own in Input > *Protection*. Needs Transmitter and Receiver 1.10.0 or newer.
+
+- **Password (encryption):** the stream is encrypted with ChaCha20-Poly1305 (the cipher of TLS 1.3 and WireGuard); the key is made from the password with PBKDF2-HMAC-SHA256 (100 000 rounds). Every packet is also authenticated: without the password nobody can listen to the MPX, and nobody can send a false or changed stream to the transmitter site. A Receiver with a password plays only the stream with the same password and ignores unencrypted ones; without a password it plays only unencrypted streams. The header shows **ENCRYPTED**. Works over UDP and TCP, with every format (PCM, FLAC, Compact MPX) and with SFN. Cost: 39 bytes per packet (about 0.25 Mbit/s with L24 / FLAC, 0.02 Mbit/s with Compact Opus). The password is kept in the settings file (readable by the users of the computer).
+- **FEC (forward error correction, UDP):** one extra packet for every 20, 10 or 5 packets (+5 / +10 / +20 % bandwidth) lets the Receiver restore a lost packet of the group, so a lost packet is not heard at all. *Burst protection* (2, 4 or 8) interleaves the groups, so that many packets lost in a row are restored too. The Receiver waits for the FEC packet of a group, which adds a delay of n x burst x packet length: shown next to the setting (e.g. FEC 1/10 with FLAC: +20 ms; with Compact Opus: +200 ms, so choose 1/5 there). Tested with 3 % random loss (FEC 1/10 restores about 70 % of the lost packets, 1/5 more) and with bursts of 2 (Opus, FEC 1/5 x2: all restored).
+- **Allowed senders (Receiver):** a list of addresses or networks, e.g. `192.168.1.10, 10.0.0.0/8, 2001:db8::/32`. Packets (UDP) and connections (TCP) from other addresses are refused and counted. Empty = everyone. Use it together with a firewall; a password is the stronger protection, since sender addresses can be forged on some networks.
+
 ## Transport over IP
 
 The Transmitter sends to any number of receivers (**Add receiver**); each output has its own address, port, protocol, format, bit depth and QoS, and shows its live bandwidth.

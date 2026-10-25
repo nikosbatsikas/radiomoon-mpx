@@ -137,11 +137,17 @@ pub struct IpTarget {
     pub dscp: u8,
     /// Opus bit rate of Compact MPX, kbit/s.
     pub opus_kbps: u32,
+    /// Protection: the stream is encrypted with this password (empty = not encrypted). The receiver needs the same.
+    pub password: String,
+    /// Protection (UDP): one FEC packet after every `fec` packets restores a lost packet (0 = off).
+    pub fec: u8,
+    /// Protection (UDP): burst protection, up to this many packets lost in a row are restored (1 = off).
+    pub fec_burst: u8,
 }
 
 impl Default for IpTarget {
     fn default() -> Self {
-        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46, opus_kbps: 256 }
+        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46, opus_kbps: 256, password: String::new(), fec: 0, fec_burst: 1 }
     }
 }
 
@@ -172,6 +178,36 @@ impl IpTarget {
         self.codec == "cflac" || self.codec == "copus"
     }
     pub fn kind(&self) -> String {
+        let mut k = self.kind_format();
+        if !self.password.is_empty() {
+            k += " · encrypted";
+        }
+        if self.fec > 0 && self.proto != "tcp" {
+            k += &format!(" · FEC 1/{}", self.fec);
+            if self.fec_burst > 1 {
+                k += &format!(" x{}", self.fec_burst);
+            }
+        }
+        k
+    }
+    /// Duration of one UDP packet of this format, ms.
+    pub fn packet_ms(&self) -> f32 {
+        match self.codec.as_str() {
+            "copus" => 20.0,
+            "cflac" => 6.667,
+            "flac" => 2.0,
+            _ => 1.25,
+        }
+    }
+    /// What FEC adds to the delay at the receiver (it waits for the FEC packet of a group), ms.
+    pub fn fec_delay_ms(&self) -> f32 {
+        if self.fec == 0 || self.proto == "tcp" {
+            0.0
+        } else {
+            self.fec as f32 * self.fec_burst.max(1) as f32 * self.packet_ms()
+        }
+    }
+    fn kind_format(&self) -> String {
         let p = if self.proto == "tcp" { "TCP" } else { "UDP" };
         if self.codec == "copus" {
             format!("{p} · Compact Opus {}", self.opus_kbps)

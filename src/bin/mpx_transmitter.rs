@@ -740,6 +740,46 @@ impl App {
                         .on_hover_text("DSCP class written into every packet, so routers and switches with QoS give the MPX priority");
                         restart |= ui.add(egui::DragValue::new(&mut t.dscp).range(0..=63).prefix("DSCP ")).changed();
                     });
+                    // protection: password (encryption), FEC (UDP)
+                    ui.horizontal_wrapped(|ui| {
+                        cap(ui, "Password");
+                        let id = egui::Id::new(("pwshow", i));
+                        let show = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                        restart |= ui
+                            .add(egui::TextEdit::singleline(&mut t.password).password(!show).hint_text("none: not encrypted").desired_width(120.0))
+                            .on_hover_text("Encrypts the stream (ChaCha20-Poly1305). The receiver needs the same password; others cannot play it or send a false stream to it.")
+                            .changed();
+                        if !t.password.is_empty() && ui.small_button(if show { "Hide" } else { "Show" }).clicked() {
+                            ui.data_mut(|d| d.insert_temp(id, !show));
+                        }
+                        if t.proto != "tcp" {
+                            egui::ComboBox::from_id_salt(("fec", i)).width(150.0).selected_text(if t.fec == 0 { "FEC off".to_string() } else { format!("FEC {}", radiomoon_mpx::protect::fec_name(t.fec)) }).show_ui(ui, |ui| {
+                                ui.label(RichText::new("Forward error correction: extra packets that restore lost ones").small().color(look::DIM));
+                                for n in radiomoon_mpx::protect::FEC_CHOICES {
+                                    let note = match n {
+                                        0 => "",
+                                        20 => " - good networks",
+                                        10 => " - internet, recommended",
+                                        _ => " - lossy links (radio, mobile)",
+                                    };
+                                    restart |= ui.selectable_value(&mut t.fec, n, format!("{}{note}", radiomoon_mpx::protect::fec_name(n))).changed();
+                                }
+                            })
+                            .response
+                            .on_hover_text("One FEC packet for every n packets restores one lost packet of them. Needs the Receiver 1.10.0 or newer.");
+                            if t.fec > 0 {
+                                let shown = |d: u8| if d <= 1 { "single losses".to_string() } else { format!("bursts of {d}") };
+                                egui::ComboBox::from_id_salt(("burst", i)).width(110.0).selected_text(shown(t.fec_burst)).show_ui(ui, |ui| {
+                                    for d in radiomoon_mpx::protect::DEPTH_CHOICES {
+                                        restart |= ui.selectable_value(&mut t.fec_burst, d, format!("Restores {}", shown(d))).changed();
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Burst protection: also restores this many packets lost in a row (interleaved FEC), at the cost of more delay");
+                                ui.label(RichText::new(format!("+{:.0} ms delay", t.fec_delay_ms())).small().color(look::DIM));
+                            }
+                        }
+                    });
                     if let Some(l) = live {
                         let saving = if t.codec != "l24" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));

@@ -6,6 +6,7 @@ use crate::mpxflac::{Depacketizer, RxStats, TcpDeframer};
 use crate::clock::RefClock;
 use crate::mpxio::{card_thread, get, set, sfn_card_thread, track_peak, Queue, Text};
 use crate::rdsdec::RdsDecoder;
+use crate::protect::{AllowList, Gate, ProtStats, TcpGate, Unprotector};
 use crate::clock::{ClockCfg, ClockState};
 use crate::sfn::{SfnCfg, SfnPlayout, SfnStatus};
 use std::collections::VecDeque;
@@ -23,6 +24,10 @@ pub struct RxCfg {
     pub buffer_ms: u32,
     /// SFN playout (UDP only): plays every sample at its time stamp + delay by the reference clock.
     pub sfn: Option<(SfnCfg, ClockCfg)>,
+    /// Protection: password of an encrypted stream (empty = accept unencrypted streams only).
+    pub password: String,
+    /// Allowed senders: addresses / networks (empty = everyone).
+    pub allow: String,
 }
 
 /// Where the received samples go: the normal buffer, or the SFN playout.
@@ -113,6 +118,8 @@ pub struct RxView {
     /// SFN playout and its reference clock (when SFN is on).
     pub sfn: Option<SfnStatus>,
     pub clock: Option<ClockState>,
+    /// Protection: encryption, FEC, rejected and blocked packets.
+    pub protect: ProtStats,
 }
 
 pub struct RxHandle {
@@ -229,7 +236,29 @@ fn status_line(v: &RxView) -> String {
     if v.stats.lost > 0 || v.stats.bad > 0 {
         t += &format!("; lost packets {} (restored {}, concealed {:.0} ms)", v.stats.lost + v.stats.bad, v.stats.recovered, v.stats.concealed as f64 / 192.0);
     }
+    let p = &v.protect;
+    if p.encrypted {
+        t += "; encrypted";
+    }
+    if p.fec_n > 0 {
+        t += &format!("; FEC restored {}", p.restored);
+    }
     t
+}
+
+/// Why nothing plays although packets arrive (protection), or the plain waiting text.
+fn waiting_line(p: &ProtStats, waiting: String) -> String {
+    if p.need_password {
+        "An encrypted stream arrives: enter its password (Input tab)".into()
+    } else if p.rejected > 0 {
+        format!("Packets rejected ({}): wrong password, or changed on the way", p.rejected)
+    } else if p.plain_rejected > 0 {
+        format!("An unencrypted stream was ignored ({} packets): a password is set here", p.plain_rejected)
+    } else if p.blocked > 0 {
+        format!("{waiting} (blocked {} from {}: not an allowed sender)", p.blocked, p.blocked_from)
+    } else {
+        waiting
+    }
 }
 
 impl RxHandle {
@@ -254,7 +283,11 @@ impl RxHandle {
         let scope = crate::mpxscope::new_scope();
         let scope2 = scope.clone();
         let (st, stt, pk, vw, port, tcp) = (stop.clone(), status.clone(), peak.clone(), view.clone(), cfg.port, cfg.proto == "tcp");
+        let (password, allow) = (cfg.password.clone(), AllowList::parse(&cfg.allow));
         std::thread::spawn(move || {
+            // the key is made from the password once (it takes some milliseconds)
+            let mut unprot = Unprotector::new(&password);
+            let key = (!password.is_empty()).then(|| crate::crypt::stream_key(&password));
             let mut samples: Vec<f32> = Vec::with_capacity(8192);
             let mut an = crate::mpxscope::Analyzer::new();
             let mut meter = Meter::new();
@@ -275,6 +308,15 @@ impl RxHandle {
                             break 'accept;
                         }
                         match l.accept() {
+                            Ok(x) if !allow.allows(x.1.ip()) => {
+                                unprot.stats.blocked += 1;
+                                unprot.stats.blocked_from = x.1.ip().to_string();
+                                drop(x);
+                                if let Ok(mut v) = vw.lock() {
+                                    v.protect = unprot.stats.clone();
+                                }
+                                set(&stt, &waiting_line(&unprot.stats, format!("Waiting for a sender on TCP port {port} ...")));
+                            }
                             Ok(x) => break x,
                             Err(_) => {
                                 meter.tick(&vw, "-", &RxStats::default(), &q, &card, &rds);
@@ -286,14 +328,43 @@ impl RxHandle {
                     let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
                     let mut buf = vec![0u8; 16384];
                     let mut de = TcpIn::Unknown(Vec::new()); // a new connection may use another format
+                    let mut gate = TcpGate::new();
+                    let mut plain: Vec<u8> = Vec::with_capacity(16384);
                     let who = who.to_string();
                     while !st.load(Ordering::Relaxed) {
                         match s.read(&mut buf) {
                             Ok(0) => break,
                             Ok(n) => {
+                                plain.clear();
+                                let refused = match gate.feed(key.as_ref(), &buf[..n], &mut plain) {
+                                    Gate::Data => false,
+                                    Gate::NeedPassword => {
+                                        unprot.stats.need_password = true;
+                                        true
+                                    }
+                                    Gate::PlainRejected => {
+                                        unprot.stats.plain_rejected += 1;
+                                        true
+                                    }
+                                    Gate::Rejected => {
+                                        unprot.stats.rejected += 1;
+                                        true
+                                    }
+                                };
+                                if refused {
+                                    unprot.stats.encrypted = false;
+                                    if let Ok(mut v) = vw.lock() {
+                                        v.protect = unprot.stats.clone();
+                                    }
+                                    set(&stt, &waiting_line(&unprot.stats, String::new()));
+                                    std::thread::sleep(Duration::from_millis(500));
+                                    break; // closes the connection
+                                }
+                                unprot.stats.need_password = false;
+                                unprot.stats.encrypted = matches!(gate, TcpGate::Secure(_));
                                 meter.add(n as u64 + (n as u64 / 1448 + 1) * 40);
                                 samples.clear();
-                                de.feed(&buf[..n], &mut samples);
+                                de.feed(&plain, &mut samples);
                                 if !samples.is_empty() {
                                     track_peak(&samples, &pk);
                                     an.push(&samples, &scope2);
@@ -305,7 +376,8 @@ impl RxHandle {
                             Err(_) => break,
                         }
                         if meter.tick(&vw, &who, &de.stats(), &q, &card, &rds) {
-                            if let Ok(v) = vw.lock() {
+                            if let Ok(mut v) = vw.lock() {
+                                v.protect = unprot.stats.clone();
                                 set(&stt, &status_line(&v));
                             }
                         }
@@ -325,30 +397,58 @@ impl RxHandle {
                 let mut de = Depacketizer::new();
                 let mut cx = CompactRx::new();
                 let mut compact = false;
+                let mut inner: Vec<Vec<u8>> = Vec::new();
+                let mut accepted = false;
                 set(&stt, &format!("Waiting for packets on UDP port {port} ..."));
                 while !st.load(Ordering::Relaxed) {
                     if let Ok((n, a)) = sock.recv_from(&mut buf) {
-                        samples.clear();
-                        let p = &buf[..n];
-                        compact = CompactRx::is_compact(p);
-                        let ok = if compact { cx.packet(p, &mut samples) } else { de.packet(p, &mut samples) };
-                        if ok {
+                        let d = &buf[..n];
+                        inner.clear();
+                        let protected = Unprotector::is_protected(d);
+                        if !allow.allows(a.ip()) {
+                            unprot.stats.blocked += 1;
+                            unprot.stats.blocked_from = a.ip().to_string();
+                        } else if protected {
+                            unprot.udp(d, &mut inner);
+                        } else if unprot.has_password() {
+                            unprot.stats.plain_rejected += 1;
+                        } else {
+                            inner.push(d.to_vec());
+                        }
+                        let mut any = false;
+                        for p in &inner {
+                            samples.clear();
+                            compact = CompactRx::is_compact(p);
+                            let ok = if compact { cx.packet(p, &mut samples) } else { de.packet(p, &mut samples) };
+                            if ok {
+                                any = true;
+                                if !samples.is_empty() {
+                                    track_peak(&samples, &pk);
+                                    an.push(&samples, &scope2);
+                                    rds.push(&samples);
+                                    q.push(&samples, if compact { cx.stamp } else { de.stamp });
+                                }
+                            }
+                        }
+                        if any {
+                            accepted = true;
+                        } else if !inner.is_empty() || (protected && unprot.stats.need_password) {
+                            accepted = false;
+                        }
+                        // the bandwidth counts every datagram of an accepted stream (also FEC packets and packets
+                        // held back for FEC)
+                        if any || (protected && accepted && allow.allows(a.ip())) {
                             from = a.to_string();
                             meter.add(n as u64 + 28);
-                            if !samples.is_empty() {
-                                track_peak(&samples, &pk);
-                                an.push(&samples, &scope2);
-                                rds.push(&samples);
-                                q.push(&samples, if compact { cx.stamp } else { de.stamp });
-                            }
                         }
                     }
                     if meter.tick(&vw, &from, if compact { &cx.stats } else { &de.stats }, &q, &card, &rds) {
-                        if let Ok(v) = vw.lock() {
+                        if let Ok(mut v) = vw.lock() {
+                            v.protect = unprot.stats.clone();
                             if v.receiving {
                                 set(&stt, &status_line(&v));
                             } else {
-                                set(&stt, &format!("Waiting for packets on UDP port {port} ..."));
+                                set(&stt, &waiting_line(&unprot.stats, format!("Waiting for packets on UDP port {port} ...")));
                             }
                         }
                     }
