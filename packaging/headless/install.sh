@@ -109,9 +109,20 @@ else
   else URL="https://github.com/$REPO/releases/latest/download/$ASSET"; fi
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
+  fetch() { # $1 = URL, $2 = file
+    if command -v wget >/dev/null 2>&1; then wget -qO "$2" "$1"; else curl -fsSL -o "$2" "$1"; fi
+  }
   say "Downloading $URL"
-  if command -v wget >/dev/null 2>&1; then wget -qO "$TMP/p.tar.gz" "$URL" || die "download failed"
-  else curl -fsSL -o "$TMP/p.tar.gz" "$URL" || die "download failed"; fi
+  if ! fetch "$URL" "$TMP/p.tar.gz"; then
+    # a new release gets its packages some minutes after it appears: take the newest release that has this one
+    [ -n "${RM_VERSION:-}" ] && die "download failed: $URL"
+    say "Not there yet (a new release is still being built?): looking for the newest release that has it"
+    fetch "https://api.github.com/repos/$REPO/releases?per_page=10" "$TMP/rel.json" || die "download failed (no connection to github.com?)"
+    URL="$(grep -o "https://github.com/$REPO/releases/download/[^\"]*/$ASSET" "$TMP/rel.json" | head -n1)"
+    [ -n "$URL" ] || die "no release has $ASSET yet"
+    say "Downloading $URL"
+    fetch "$URL" "$TMP/p.tar.gz" || die "download failed: $URL"
+  fi
   tar -xzf "$TMP/p.tar.gz" -C "$TMP"
   SRC="$(dirname "$(find "$TMP" -name radiomoon-mpx-rxd -type f | head -n1)")"
   [ -x "$SRC/radiomoon-mpx-rxd" ] || die "the package has no programs"
