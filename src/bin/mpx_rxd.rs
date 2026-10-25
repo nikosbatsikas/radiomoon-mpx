@@ -32,6 +32,9 @@ impl web::App for Rx {
         }
         rxcore::save(&s).map_err(|e| format!("cannot save the settings: {e}"))
     }
+    fn icon(&self) -> &'static [u8] {
+        include_bytes!("../../packaging/receiver.png")
+    }
     fn devices_json(&self) -> String {
         let host = rodio::cpal::default_host();
         let outputs: Vec<String> = host.output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();

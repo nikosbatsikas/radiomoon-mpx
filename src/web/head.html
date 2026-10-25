@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RadioMoon MPX</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
 :root{--bg:#12151c;--panel:#1a1f29;--card:#212734;--inset:#171b24;--border:#2e3646;--text:#e6e9ef;--dim:#8f98aa;--accent:#5aa9ff;--good:#3ecf8e;--warn:#f0b429;--bad:#ef5350}
 *{box-sizing:border-box}
@@ -40,11 +41,14 @@ table{border-collapse:collapse;width:100%}td,th{padding:4px 6px;text-align:left;
 .ps{font:600 26px/1.2 ui-monospace,Consolas,monospace;color:var(--good);background:var(--inset);padding:6px 12px;border-radius:6px;display:inline-block;letter-spacing:.08em}
 canvas{width:100%;height:160px;background:var(--inset);border-radius:6px}
 .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+#about a{color:var(--accent)}#about h3{font-size:11px;letter-spacing:.06em;color:var(--accent);margin:14px 0 4px}#about ul{margin:0;padding-left:18px}
+.gift{display:inline-block;background:#ffc439;color:#003087;border:1px solid #0070ba;border-radius:14px;padding:4px 14px;font-weight:700;text-decoration:none}
 .savebar{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);padding:8px 0;margin-top:8px;display:flex;gap:10px;align-items:center}
 </style>
 </head>
 <body>
-<header><h1 id="title">RadioMoon MPX</h1><span id="pills"></span><span class="sp"></span><span class="hint" id="who"></span><button class="s" id="logout" style="display:none">Log out</button></header>
+<header><img src="/logo.png" alt="" width="26" height="26" style="border-radius:6px"><h1 id="title">RadioMoon MPX</h1><span id="pills"></span><span class="sp"></span><span class="hint" id="who"></span><button class="s" id="aboutbtn">About</button><button class="s" id="logout" style="display:none">Log out</button></header>
+<div id="about" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:5;overflow:auto"><div class="card" style="max-width:440px;margin:6vh auto;padding:20px 22px;border-color:#5aa9ff88" id="aboutbox"></div></div>
 <div id="login" style="display:none" class="card"><h2>Log in</h2>
 <div class="grid"><label class="cap">User</label><input id="lu" type="text" autocomplete="username" value="admin"><label class="cap">Password</label><input id="lp" type="password" autocomplete="current-password"></div>
 <p><button class="b" id="lb">Log in</button> <span class="hint" id="lerr"></span></p></div>
@@ -105,7 +109,25 @@ function accountCard(){const o={old:"",user:"",password:"",again:""};return card
  el("p",{class:"hint"},"The page is plain HTTP: use it on your own network or through a VPN / SSH tunnel, not open to the internet."));}
 let ST=null,timer=null;
 async function poll(){try{ST=await api("/api/status");if(TAB==="status"||TAB==="log")render();pills();}catch(e){}}
-async function boot(){try{const me=await api("/api/me");$("#who").textContent=me.user+" · "+me.version;$("#who").dataset.user=me.user;}catch(e){return;}
+let ME=null;
+function upt(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+" d ":"")+(d||h?h+" h ":"")+m+" min";}
+function showAbout(){const b=$("#aboutbox");b.innerHTML="";const v=ME?ME.version:"";
+ b.append(el("div",{style:"text-align:center"},el("img",{src:"/logo.png",width:"72",height:"72",style:"border-radius:14px"}),el("div",{style:"font-size:19px;font-weight:700;margin-top:4px"},ABOUT.name),
+  v?el("div",{class:"mono",style:"color:"+C.good},"Version "+v+" · headless edition"):null,el("div",{class:"hint",style:"margin-top:2px"},ABOUT.tagline)),
+  el("h3",{},"CREATED BY"),el("div",{class:"grid",style:"grid-template-columns:130px 1fr"},el("b",{},"Nikos Batsikas"),el("span",{class:"hint"},"Author - idea, design, testing"),el("b",{},"Claude"),el("span",{class:"hint"},"AI pair programmer by Anthropic")),
+  el("h3",{},"FEATURES"),el("ul",{},...ABOUT.features.map(f=>el("li",{},f))),
+  ME?el("h3",{},"THIS SYSTEM"):null,
+  ME?el("div",{class:"grid",style:"grid-template-columns:130px 1fr"},el("label",{class:"cap"},"Computer"),el("span",{},ME.host||"-"),el("label",{class:"cap"},"System"),el("span",{},ME.os+" · "+ME.arch),el("label",{class:"cap"},"Running for"),el("span",{},upt(ME.uptime_s)),el("label",{class:"cap"},"Data folder"),el("span",{class:"mono"},ME.data)):null,
+  el("h3",{},"PROJECT"),el("div",{},el("a",{href:"https://github.com/nikosbatsikas/radiomoon-mpx",target:"_blank",rel:"noopener"},"github.com/nikosbatsikas/radiomoon-mpx")),
+  el("div",{},el("a",{href:"https://github.com/nikosbatsikas/radiomoon-mpx/wiki",target:"_blank",rel:"noopener"},"Wiki (documentation)")," · ",el("a",{href:"https://github.com/nikosbatsikas/radiomoon-mpx/releases",target:"_blank",rel:"noopener"},"Releases")),
+  el("div",{class:"hint"},"Part of RadioMoon - github.com/nikosbatsikas/radiomoon"),el("div",{class:"hint"},"Written in Rust · © 2026 Nikos Batsikas"),
+  el("div",{class:"row",style:"display:flex;align-items:center;gap:10px;margin-top:12px"},el("div",{style:"flex:1"},el("b",{},"Like RadioMoon MPX?"),el("div",{class:"hint"},"Send a gift to the author.")),el("a",{class:"gift",href:"https://paypal.me/nikosbatsikas",target:"_blank",rel:"noopener"},"Gift with PayPal")),
+  el("div",{style:"text-align:center;margin-top:12px"},el("button",{class:"b",onclick:()=>$("#about").style.display="none"},"Close")));
+ $("#about").style.display="block";}
+$("#aboutbtn").onclick=async()=>{try{ME=await api("/api/me");}catch(e){}showAbout();};
+$("#about").addEventListener("click",e=>{if(e.target.id==="about")$("#about").style.display="none";});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("#about").style.display="none";});
+async function boot(){try{const me=await api("/api/me");ME=me;$("#who").textContent=me.user+" · "+me.version;$("#who").dataset.user=me.user;}catch(e){return;}
  $("#login").style.display="none";$("#app").style.display="block";$("#logout").style.display="inline-block";
  S=await api("/api/settings");try{DEV=await api("/api/devices");}catch(e){}
  if(!TAB)TAB="status";tabs(TABS0);await poll();render();clearInterval(timer);timer=setInterval(poll,1000);}
