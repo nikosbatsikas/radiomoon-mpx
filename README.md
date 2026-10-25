@@ -121,7 +121,7 @@ Like μMPX, but for RadioMoon MPX Transmitter -> RadioMoon MPX Receiver (not com
 
 Packets: RTP payload type 101 (UDP) or a TCP stream starting with `RMC1`; each packet carries the audio frame, the four levels and (every 0.5 s or when it changes) the RDS data. A lost Opus packet is filled by Opus' own concealment, a lost FLAC packet by silence; the pilot and RDS never stop. Use the full composite formats (PCM / FLAC) when the transmitter's exact composite waveform must arrive, e.g. after an external composite clipper.
 
-**QoS:** every output marks its packets with a DSCP class: EF (46, default) for real-time audio, AF41 (34) on AES67 networks, CS5, CS6, off, or any value 0-63. Linux and macOS set it directly. Windows ignores the marking of programs unless a QoS policy allows it: Group Policy > Computer Configuration > Windows Settings > Policy-based QoS > new policy for `RadioMoon-MPX-Transmitter.exe` with the DSCP value.
+**QoS:** every output marks its packets with a DSCP class: EF (46, default) for real-time audio, AF41 (34) on AES67 networks, CS5, CS6, off, or any value 0-63. Linux and macOS set it directly. Windows ignores the marking of programs unless a QoS policy allows it: Group Policy > Computer Configuration > Windows Settings > Policy-based QoS > new policy for `RadioMoon-MPX-Transmitter.exe` with the DSCP value, or PowerShell `New-NetQosPolicy`; step by step in the [Wiki: QoS on Windows](../../wiki/QoS-on-Windows).
 
 A lost UDP packet is concealed by repeating the last 2 ms. That is a whole number of cycles of 19, 38 and 57 kHz, so pilot, stereo and RDS stay in phase (radios do not drop to mono or lose RDS) and the timing stays exact. The receiver status shows the format, the bitrate and the lost / concealed packets.
 

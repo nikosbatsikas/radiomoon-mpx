@@ -11,6 +11,6 @@ Two programs for FM broadcasting over IP:
 | Headless (web interface) | Linux servers, Raspberry Pi, **Alpine Linux** | [[Headless and Web Interface]], [[Alpine Linux]], [[Raspberry Pi]] |
 | CLAP plug-in | REAPER, Bitwig, FL Studio, Studio One ... | [[CLAP Plug-in]] |
 
-Topics: [[IP Transport and Formats]] · [[Protection]] (encryption, FEC, allowed senders) · [[SFN]] · [[RDS]] · [[Backup Source]] · [[Receiver Log]] · [[Service and Tray]] · [[Troubleshooting]]
+Topics: [[IP Transport and Formats]] · [[QoS on Windows]] · [[Protection]] (encryption, FEC, allowed senders) · [[SFN]] · [[RDS]] · [[Backup Source]] · [[Receiver Log]] · [[Service and Tray]] · [[Troubleshooting]]
 
 Downloads: [Releases](https://github.com/nikosbatsikas/radiomoon-mpx/releases) · Changes: [CHANGELOG](https://github.com/nikosbatsikas/radiomoon-mpx/blob/main/CHANGELOG.md)

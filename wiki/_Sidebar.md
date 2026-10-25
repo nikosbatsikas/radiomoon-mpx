@@ -4,6 +4,7 @@
 - [[Transmitter]]
 - [[Receiver]]
 - [[IP Transport and Formats]]
+- [[QoS on Windows]]
 - [[Protection]]
 - [[SFN]]
 - [[RDS]]
