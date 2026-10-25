@@ -43,3 +43,56 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p radiomoon-mpx -p radiomoon_mpx_clap
+
+  headless-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: headless
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build the headless editions (no window libraries)
+        run: |
+          cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+          ldd target/release/radiomoon-mpx-rxd
+          target/release/radiomoon-mpx-rxd --version
+      - name: Unit tests without the windows
+        run: cargo test --release --lib --no-default-features
+      - name: Install with the installer (systemd) and check the web interfaces
+        shell: bash
+        run: |
+          mkdir -p pkg && cp target/release/radiomoon-mpx-txd target/release/radiomoon-mpx-rxd packaging/headless/install.sh pkg/
+          sudo RM_PASSWORD=secret-pass-1 sh pkg/install.sh both
+          sleep 3
+          systemctl --no-pager status radiomoon-mpx-rxd radiomoon-mpx-txd | head -30 || true
+          curl -sf -o /dev/null http://127.0.0.1:8081/
+          curl -sf -c cj -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8081/api/login | grep -q ok
+          curl -sf -b cj -o rx.json http://127.0.0.1:8081/api/status; head -c 200 rx.json; echo
+          curl -sf -c cj2 -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8080/api/login | grep -q ok
+          curl -sf -b cj2 -o tx.json http://127.0.0.1:8080/api/status; head -c 200 tx.json; echo
+          echo "::notice title=systemd install test::$(head -c 300 rx.json)"
+          sudo journalctl -u radiomoon-mpx-rxd --no-pager > j.txt || true; tail -5 j.txt
+          sudo sh pkg/install.sh uninstall
+
+  alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build on Alpine (musl) and test the installer with OpenRC
+        shell: bash
+        run: |
+          set +e
+          docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh packaging/headless/ci-alpine-test.sh > alpine.log 2>&1
+          RC=$?
+          cat alpine.log
+          if [ $RC -ne 0 ]; then
+            T=$(grep -v "^\s*Compiling\|^\s*Downloaded\|^\s*Downloading" alpine.log | tail -70 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+            echo "::error title=Alpine build / install test::$T"
+          else
+            T=$(grep -A40 "== results" alpine.log | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+            echo "::notice title=Alpine install test::$T"
+          fi
+          exit $RC

@@ -46,6 +46,12 @@ pub struct RxStatus {
 /// Where the Transmitter keeps its settings when it is installed: ProgramData\RadioMoon (Windows) or
 /// ~/.local/share/RadioMoon (Linux, macOS). The service and the CLAP plug-in use the same file.
 pub fn shared_dir() -> PathBuf {
+    // the headless editions keep everything in one folder of their own (e.g. /var/lib/radiomoon-mpx)
+    if let Some(d) = std::env::var_os("RADIOMOON_DATA") {
+        let dir = PathBuf::from(d);
+        let _ = std::fs::create_dir_all(&dir);
+        return dir;
+    }
     let base = std::env::var_os("PROGRAMDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
@@ -54,6 +60,11 @@ pub fn shared_dir() -> PathBuf {
     let dir = base.join("RadioMoon");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// Last change of a file (to notice new settings).
+pub fn modified(p: &Path) -> Option<SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
 pub fn now_ms() -> u64 {

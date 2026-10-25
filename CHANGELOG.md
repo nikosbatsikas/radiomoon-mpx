@@ -2,6 +2,14 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.11.0
+- **Headless editions with a web interface** (Linux, Raspberry Pi, **Alpine Linux**): `radiomoon-mpx-txd` (Transmitter, port 8080) and `radiomoon-mpx-rxd` (Receiver, port 8081) run without a desktop as services and are set up in a browser: live status with spectrum, levels and RDS, every setting of the window programs, the Receiver's log, and the login. Login with user and password (PBKDF2), HttpOnly / SameSite cookies, protection against cross-site requests and a lock-out after 10 wrong passwords. Same settings files as the window programs.
+- **Installer** `packaging/headless/install.sh` (one command): Alpine (OpenRC, supervise-daemon) and Debian / Ubuntu / Raspberry Pi OS (systemd); installs ALSA, a service user, the service and the web password; `uninstall` removes it. New packages: `RadioMoon-MPX-Headless-alpine-x64/arm64.tar.gz` (musl, built on Alpine) and `RadioMoon-MPX-Headless-linux-x64/arm64.tar.gz`.
+- **Receiver log:** stream lost / back (with the time without stream), lost packets every 10 s (concealed ms, restored by FEC), wrong password, unencrypted or blocked senders, backup on / off, SFN lock, sound card, TCP connections. New **Log** tab in the window (with Copy), on the web page, and in the system log of the headless Receiver.
+- **Wiki** with pages for installation, both programs, formats, protection, SFN, RDS, backup, log, CLAP, headless / Alpine / Raspberry Pi and troubleshooting (published from the `wiki/` folder).
+- FEC: packets before the first one received are no longer counted as "could not restore".
+- The window libraries are now an optional feature (`gui`, on by default); the CLAP plug-in is built without them.
+
 ## 1.10.0
 - **Backup MPX source (Receiver):** Input > Backup source. When the stream stops (after a set time, default 1 s), the MPX of a sound card input (192 kHz, left or right, level in dB) goes on air - an analog STL, an off-air receiver or a local processor - and the stream goes back on air after it has come without a break for a set time (default 5 s). Optionally also when the stream carries silence. The header shows ON BACKUP; scope, RDS and levels follow what is on air.
 - **Protection of the MPX stream**, per IP output (Transmitter) and in Input > Protection (Receiver):

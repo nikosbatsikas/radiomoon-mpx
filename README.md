@@ -18,9 +18,27 @@ These programs were part of the RadioMoon repository up to version 0.5.30.
 | Windows x64 / x86 / arm64 | `RadioMoon-MPX-<ver>-windows-<arch>-setup.exe`, or the portable `...-portable.zip` |
 | Linux x64 / arm64 (Raspberry Pi 3/4/5, 64-bit OS) | `RadioMoon-MPX-Transmitter-<ver>-linux-<arch>.tar.gz`, `RadioMoon-MPX-Receiver-<ver>-linux-<arch>.tar.gz` |
 | macOS (Apple Silicon) | `RadioMoon-MPX-<ver>-macos-arm64.dmg` (both apps and the CLAP plug-in) |
+| Headless (no desktop, web interface): Linux / Raspberry Pi | `RadioMoon-MPX-Headless-linux-<arch>.tar.gz` (systemd) |
+| Headless: Alpine Linux x64 / arm64 | `RadioMoon-MPX-Headless-alpine-<arch>.tar.gz` (OpenRC) |
 | CLAP plug-in | in every package: Windows setup (option "Install the CLAP plug-in"), `CLAP\RadioMoon-MPX-Transmitter.clap` in the zip, `RadioMoon-MPX-Transmitter.clap` in the Linux transmitter package, `RadioMoon MPX Transmitter.clap` in the dmg |
 
-Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is required for the composite output.
+Linux needs a desktop session and `libasound2` (servers without a desktop: the headless edition below). A 192 kHz capable sound card is required for the composite output.
+
+Documentation: the [Wiki](../../wiki).
+
+## Headless edition (web interface)
+
+For Linux servers, Raspberry Pi and **Alpine Linux** without a desktop: `radiomoon-mpx-txd` (Transmitter, web page on port 8080) and `radiomoon-mpx-rxd` (Receiver, port 8081) run as services and are set up and watched in a browser: status with spectrum and RDS, all settings, the Receiver's log, login with user and password.
+
+```sh
+wget -qO- https://raw.githubusercontent.com/nikosbatsikas/radiomoon-mpx/main/packaging/headless/install.sh | sudo sh -s -- receiver
+```
+
+(`transmitter`, `both` or `uninstall`; on Alpine as root without `sudo`). The installer adds the ALSA packages, a service user, an OpenRC (Alpine) or systemd service and asks for the web password. Supported: Alpine x86_64 / aarch64, Debian 12+, Ubuntu 22.04+, Raspberry Pi OS 64-bit (bookworm+). The page is plain HTTP: keep it inside your network or use a VPN / SSH tunnel. Details: [Wiki: Headless and Web Interface](../../wiki/Headless-and-Web-Interface), [Alpine Linux](../../wiki/Alpine-Linux).
+
+## Receiver log
+
+The Receiver logs stream lost / back, lost packets (summed every 10 s, with the packets restored by FEC), rejected or blocked senders, backup on / off, SFN lock and sound card changes: the **Log** tab in the window, the Log tab of the web page, and the system log of the headless edition.
 
 ## CLAP plug-in
 
@@ -125,7 +143,8 @@ The **tray icon** (Windows and Linux desktops with a tray) is coloured while run
 ## Building
 
 ```
-cargo build --release          # both programs in target/release
+cargo build --release          # both programs (and the headless ones) in target/release
+cargo build --release --no-default-features   # only the headless editions (no window libraries)
 cargo test --lib               # codec, packet handling and RDS tests
 .\build_windows.ps1 -Arch x64  # Windows setup + portable zip (needs Inno Setup 6)
 ```

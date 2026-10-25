@@ -21,83 +21,7 @@ use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(default)]
-struct Saved {
-    proto: String,
-    port: u16,
-    device: String,
-    buffer_ms: u32,
-    autostart: bool,
-    close_to_tray: bool,
-    fit_window: bool,
-    /// SFN: play every sample at its time stamp + delay (UDP only).
-    sfn_on: bool,
-    sfn_delay_ms: f64,
-    sfn_correction_us: f64,
-    clock: ClockCfg,
-    /// Protection: password of an encrypted stream (empty = unencrypted streams only).
-    password: String,
-    /// Allowed senders (addresses / networks; empty = everyone).
-    allow: String,
-    /// Backup MPX from a sound card input, on air while the stream is missing.
-    backup: BackupCfg,
-}
-
-impl Default for Saved {
-    fn default() -> Self {
-        Saved {
-            proto: "udp".into(),
-            port: 5004,
-            device: String::new(),
-            buffer_ms: 250,
-            autostart: true,
-            close_to_tray: true,
-            fit_window: true,
-            sfn_on: false,
-            sfn_delay_ms: 500.0,
-            sfn_correction_us: 0.0,
-            clock: ClockCfg::default(),
-            password: String::new(),
-            allow: String::new(),
-            backup: BackupCfg::default(),
-        }
-    }
-}
-
-/// The settings live in ProgramData (Windows) so the window and the service (another user account) share them.
-fn cfg_path() -> PathBuf {
-    let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();
-    if exe.join("portable.flag").exists() {
-        return exe.join("mpx-receiver.json");
-    }
-    let base = std::env::var_os("PROGRAMDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or(exe);
-    let dir = base.join("RadioMoon");
-    let _ = std::fs::create_dir_all(&dir);
-    let file = dir.join("mpx-receiver.json");
-    // first versions kept the settings in the user's LocalAppData: take them over once
-    if !file.exists() {
-        if let Some(old) = std::env::var_os("LOCALAPPDATA").map(|o| PathBuf::from(o).join("RadioMoon").join("mpx-receiver.json")) {
-            if old.exists() {
-                let _ = std::fs::copy(&old, &file);
-            }
-        }
-    }
-    file
-}
-
-fn load() -> Saved {
-    std::fs::read_to_string(cfg_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
-}
-
-fn rx_cfg(s: &Saved) -> RxCfg {
-    let sfn = (s.sfn_on && s.proto == "udp").then(|| (SfnCfg { delay_ms: s.sfn_delay_ms, correction_us: s.sfn_correction_us }, s.clock.clone()));
-    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn, password: s.password.clone(), allow: s.allow.clone(), backup: s.backup.clone() }
-}
+use radiomoon_mpx::rxcore::{cfg_path, load, rx_cfg, service_work, Saved};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -105,22 +29,8 @@ enum Tab {
     Input,
     Output,
     Sfn,
+    Log,
     Service,
-}
-
-// ---------------------------------------------------------------- service (no window)
-
-/// The work of the service: receives with the saved settings and writes its live status for the window.
-fn service_work(stop: Arc<AtomicBool>) {
-    let st_path = status::path_for(&cfg_path());
-    let r = RxHandle::start(&rx_cfg(&load()));
-    while !stop.load(Ordering::Relaxed) {
-        let snap = RxStatus { time_ms: status::now_ms(), status: r.status_text(), peak: r.peak(), view: r.view(), scope: r.scope.lock().map(|g| g.clone()).unwrap_or_default() };
-        status::write(&st_path, &snap);
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    r.stop();
-    status::remove(&st_path);
 }
 
 // ---------------------------------------------------------------- window
@@ -354,6 +264,44 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(if r.rt.is_empty() { "-" } else { r.rt.as_str() }).color(look::TEXT));
             });
+        });
+    }
+
+    /// The event log: stream lost / back, lost packets, refused senders, backup, SFN, sound card.
+    fn log_card(&self, ui: &mut egui::Ui, live: Option<&Live>) {
+        card(ui, "Log", |ui| {
+            let Some(l) = live else {
+                ui.label(RichText::new("Not running.").color(look::DIM));
+                return;
+            };
+            let ev = &l.v.events;
+            let now = radiomoon_mpx::status::now_ms();
+            ui.horizontal(|ui| {
+                let faults = ev.iter().filter(|e| e.level == 2).count();
+                let warns = ev.iter().filter(|e| e.level == 1).count();
+                ui.label(RichText::new(format!("{} events · {faults} faults · {warns} warnings · times in UTC", ev.len())).small().color(look::DIM));
+                if ui.small_button("Copy").on_hover_text("Copy the log as text").clicked() {
+                    let text: String = ev.iter().map(|e| format!("{} UTC  {}\n", radiomoon_mpx::events::time_text(e.t, 0), e.text)).collect();
+                    ui.ctx().copy_text(text);
+                }
+            });
+            egui::ScrollArea::vertical().max_height(320.0).stick_to_bottom(true).show(ui, |ui| {
+                egui::Grid::new("log").num_columns(3).spacing([10.0, 3.0]).striped(true).show(ui, |ui| {
+                    for e in ev.iter() {
+                        let color = match e.level {
+                            2 => look::BAD,
+                            1 => look::WARN,
+                            _ => look::GOOD,
+                        };
+                        look::dot(ui, color);
+                        ui.label(RichText::new(radiomoon_mpx::events::time_text(e.t, 0)).small().monospace().color(look::DIM))
+                            .on_hover_text(format!("{} ago", radiomoon_mpx::events::dur(now.saturating_sub(e.t))));
+                        ui.label(RichText::new(&e.text).color(if e.level == 2 { look::BAD } else { look::TEXT }));
+                        ui.end_row();
+                    }
+                });
+            });
+            ui.label(RichText::new("The last 300 events since the Receiver started. Lost packets are summed up every 10 seconds.").small().color(look::DIM));
         });
     }
 
@@ -641,7 +589,7 @@ impl eframe::App for App {
                 // the link on top, the settings in tabs below
                 self.link_card(ui, live.as_ref());
                 ui.horizontal_wrapped(|ui| {
-                    for (t, name) in [(Tab::Rds, "RDS"), (Tab::Input, "Input"), (Tab::Output, "Output"), (Tab::Sfn, "SFN"), (Tab::Service, "Service, tray & window")] {
+                    for (t, name) in [(Tab::Rds, "RDS"), (Tab::Input, "Input"), (Tab::Output, "Output"), (Tab::Sfn, "SFN"), (Tab::Log, "Log"), (Tab::Service, "Service, tray & window")] {
                         let on = self.tab == t;
                         let txt = RichText::new(name).strong().color(if on { look::ACCENT } else { look::TEXT });
                         if ui.add(egui::Button::new(txt).fill(if on { look::CARD } else { look::PANEL }).stroke(egui::Stroke::new(1.0_f32, if on { look::ACCENT } else { look::BORDER }))).clicked() {
@@ -655,6 +603,7 @@ impl eframe::App for App {
                     Tab::Input => ch |= self.input_card(ui, live.as_ref()),
                     Tab::Output => ch |= self.output_card(ui, svc.running),
                     Tab::Sfn => ch |= self.sfn_card(ui, live.as_ref(), svc.running),
+                    Tab::Log => self.log_card(ui, live.as_ref()),
                     Tab::Service => {
                         let (mut c2t, mut fit) = (self.s.close_to_tray, self.s.fit_window);
                         if self.host.settings_ui(ui, &mut c2t, &mut fit) {

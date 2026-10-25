@@ -1,0 +1,32 @@
+# Publishes the pages in wiki/ to the GitHub wiki of the repository when they change on main.
+# The wiki must exist once: open the Wiki tab on GitHub, "Create the first page", save. After that this workflow
+# keeps it equal to the wiki/ folder.
+name: wiki
+on:
+  push:
+    branches: [main]
+    paths: ["wiki/**"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy wiki/ to the wiki repository
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git clone -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" w; then
+            echo "::warning title=Wiki not created yet::Open the Wiki tab of the repository, create the first page and save it once, then run this workflow again (Actions > wiki > Run workflow)."
+            exit 0
+          fi
+          rsync -a --delete --exclude .git wiki/ w/
+          cd w
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "wiki unchanged"; exit 0; fi
+          git commit -qm "Wiki from ${GITHUB_SHA::7}"
+          git push -q

@@ -1,6 +1,6 @@
 [package]
 name = "radiomoon_mpx_clap"
-version = "1.10.0"
+version = "1.11.0"
 edition = "2021"
 description = "RadioMoon MPX Transmitter as a CLAP plug-in"
 license = "LicenseRef-RadioMoon"
@@ -10,6 +10,6 @@ name = "radiomoon_mpx_clap"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-radiomoon-mpx = { path = ".." }
+radiomoon-mpx = { path = "..", default-features = false }
 clap-sys = "0.5"
 serde_json = "1"

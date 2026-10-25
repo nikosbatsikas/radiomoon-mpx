@@ -1,5 +1,6 @@
 //! Analysis of the MPX composite signal (192 kHz, 1.0 = 75 kHz deviation): spectrum, waveform,
 //! pilot / RDS / L+R / L-R levels and the peak deviation. Used by the MPX generator and by the receiver.
+#[cfg(feature = "gui")]
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -135,6 +136,7 @@ impl Analyzer {
 }
 
 /// Draws the readouts, the spectrum (0-96 kHz) and the oscilloscope.
+#[cfg(feature = "gui")]
 pub fn draw(ui: &mut egui::Ui, scope: &Scope) {
     let d = scope.lock().map(|g| g.clone()).unwrap_or_default();
     let kz = |v: f32| format!("{:.1} kHz ({:.1}%)", v * 75.0, v * 100.0);
