@@ -17,9 +17,19 @@ These programs were part of the RadioMoon repository up to version 0.5.30.
 |---|---|
 | Windows x64 / x86 / arm64 | `RadioMoon-MPX-<ver>-windows-<arch>-setup.exe`, or the portable `...-portable.zip` |
 | Linux x64 / arm64 (Raspberry Pi 3/4/5, 64-bit OS) | `RadioMoon-MPX-Transmitter-<ver>-linux-<arch>.tar.gz`, `RadioMoon-MPX-Receiver-<ver>-linux-<arch>.tar.gz` |
-| macOS (Apple Silicon) | `RadioMoon-MPX-<ver>-macos-arm64.dmg` (both apps) |
+| macOS (Apple Silicon) | `RadioMoon-MPX-<ver>-macos-arm64.dmg` (both apps and the CLAP plug-in) |
+| CLAP plug-in | in every package: Windows setup (option "Install the CLAP plug-in"), `CLAP\RadioMoon-MPX-Transmitter.clap` in the zip, `RadioMoon-MPX-Transmitter.clap` in the Linux transmitter package, `RadioMoon MPX Transmitter.clap` in the dmg |
 
 Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is required for the composite output.
+
+## CLAP plug-in
+
+The Transmitter is also a **CLAP plug-in** ("RadioMoon MPX Transmitter", vendor RadioMoon) for audio programs that load CLAP plug-ins: REAPER, Bitwig Studio, FL Studio, Studio One, MultitrackStudio and others. Put it on the master track (or any stereo track): the audio passes through unchanged, and the plug-in builds the multiplex from it - stereo, pilot, RDS, Compact MPX, SFN time stamps, QoS - and sends it to the IP targets and / or the 192 kHz sound card, exactly as the Transmitter program would.
+
+- **Install:** Windows: the setup's option copies it to `C:\Program Files\Common Files\CLAP` (the x86 setup to the 32-bit Common Files, for 32-bit hosts). Linux: copy `RadioMoon-MPX-Transmitter.clap` to `~/.clap` (or `/usr/lib/clap`). macOS: copy `RadioMoon MPX Transmitter.clap` from the dmg to `~/Library/Audio/Plug-Ins/CLAP`. Then let the audio program rescan its plug-ins.
+- **Settings:** the plug-in uses the settings of the Transmitter program (targets, signal, RDS, SFN ...): set them up in the Transmitter window. While the plug-in runs, the window shows **PLUG-IN** and its live status (links, Mbit/s, levels, scope); changes made in the window reach the plug-in within a quarter of a second (outputs and SFN restart its engine, level and RDS are applied at once). The window's own Start is not needed then, and the service should be stopped.
+- **Portable:** a `mpx-transmitter.json` next to the plug-in file, or in the folder above it (the portable zip), is used instead of the shared settings.
+- The plug-in takes any sample rate of the host (44.1, 48, 96 kHz ...). The audio thread never waits: if the host renders faster than real time (export / freeze), the extra audio is dropped from the MPX, the track itself is not affected.
 
 ## AES67 / Dante input
 
@@ -47,6 +57,14 @@ The time stamp is an RTP header extension (profile 0x524D, 8 bytes, ns since 197
 ## Putting RadioMoon on air
 
 Enable RadioMoon's internet broadcast (Icecast or Shoutcast) and set the MPX Transmitter's source to **Internet stream** with that URL. RadioMoon sends the title of every song to the server, and the transmitter turns it into the RDS RadioText (*RadioText from the song*). A sound input fed from RadioMoon's output works too, with a fixed RadioText.
+
+## Protection of the stream
+
+Every IP output of the Transmitter (each receiver in the IP tab) has its own protection settings; the Receiver sets its own in Input > *Protection*. Needs Transmitter and Receiver 1.10.0 or newer.
+
+- **Password (encryption):** the stream is encrypted with ChaCha20-Poly1305 (the cipher of TLS 1.3 and WireGuard); the key is made from the password with PBKDF2-HMAC-SHA256 (100 000 rounds). Every packet is also authenticated: without the password nobody can listen to the MPX, and nobody can send a false or changed stream to the transmitter site. A Receiver with a password plays only the stream with the same password and ignores unencrypted ones; without a password it plays only unencrypted streams. The header shows **ENCRYPTED**. Works over UDP and TCP, with every format (PCM, FLAC, Compact MPX) and with SFN. Cost: 39 bytes per packet (about 0.25 Mbit/s with L24 / FLAC, 0.02 Mbit/s with Compact Opus). The password is kept in the settings file (readable by the users of the computer).
+- **FEC (forward error correction, UDP):** one extra packet for every 20, 10 or 5 packets (+5 / +10 / +20 % bandwidth) lets the Receiver restore a lost packet of the group, so a lost packet is not heard at all. *Burst protection* (2, 4 or 8) interleaves the groups, so that many packets lost in a row are restored too. The Receiver waits for the FEC packet of a group, which adds a delay of n x burst x packet length: shown next to the setting (e.g. FEC 1/10 with FLAC: +20 ms; with Compact Opus: +200 ms, so choose 1/5 there). Tested with 3 % random loss (FEC 1/10 restores about 70 % of the lost packets, 1/5 more) and with bursts of 2 (Opus, FEC 1/5 x2: all restored).
+- **Allowed senders (Receiver):** a list of addresses or networks, e.g. `192.168.1.10, 10.0.0.0/8, 2001:db8::/32`. Packets (UDP) and connections (TCP) from other addresses are refused and counted. Empty = everyone. Use it together with a firewall; a password is the stronger protection, since sender addresses can be forged on some networks.
 
 ## Transport over IP
 

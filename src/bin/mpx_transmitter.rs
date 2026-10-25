@@ -52,14 +52,7 @@ fn cfg_path() -> PathBuf {
     if exe.join("portable.flag").exists() {
         return exe.join("mpx-transmitter.json");
     }
-    let base = std::env::var_os("PROGRAMDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or(exe);
-    let dir = base.join("RadioMoon");
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("mpx-transmitter.json")
+    status::shared_dir().join("mpx-transmitter.json")
 }
 
 fn load() -> Saved {
@@ -130,6 +123,7 @@ fn service_work(stop: Arc<AtomicBool>) {
             links: m.links(),
             scope: m.scope.lock().map(|g| g.clone()).unwrap_or_default(),
             clock: m.clock_state(),
+            engine: "service".into(),
         };
         status::write(&st_path, &snap);
         std::thread::sleep(Duration::from_millis(250));
@@ -185,6 +179,9 @@ struct App {
     ports: Vec<String>,
     /// Listens for AES67 stream announcements while the AES67 source is shown.
     finder: Option<Aes67Finder>,
+    /// The AF list while it is being typed: sent only when finished (Enter or leaving the field), so radios
+    /// never store a half-typed frequency ("95" while typing "95.7").
+    af_edit: Option<String>,
 }
 
 impl App {
@@ -226,8 +223,9 @@ impl App {
     }
 
     /// The service status file, read 4 times a second while the service runs.
+    /// The status of a transmitter running elsewhere: the service, or the CLAP plug-in in an audio program.
     fn read_service(&mut self) {
-        if !self.host.state().running {
+        if self.mpx.is_some() {
             self.svc = None;
             return;
         }
@@ -283,7 +281,11 @@ impl App {
                 if ui.button("About").clicked() {
                     self.about = true;
                 }
-                if svc.installed {
+                let in_plugin = self.svc.as_ref().map(|s| s.engine == "plugin").unwrap_or(false);
+                if in_plugin {
+                    // the CLAP plug-in in an audio program does the work: it starts and stops with the program
+                    ui.label(RichText::new("runs in the CLAP plug-in").small().color(look::DIM));
+                } else if svc.installed {
                     // the service does the work: Start / Stop control the service
                     if svc.running {
                         if look::danger_button(ui, "■  Stop").on_hover_text("Stops the service").clicked() {
@@ -305,7 +307,9 @@ impl App {
                     None if svc.running => pill(ui, "STARTING", look::WARN),
                     None => pill(ui, "STOPPED", look::DIM),
                 }
-                if svc.installed {
+                if in_plugin {
+                    pill(ui, "PLUG-IN", look::ACCENT);
+                } else if svc.installed {
                     pill(ui, "SERVICE", look::ACCENT);
                 }
             });
@@ -541,7 +545,24 @@ impl App {
         });
         card(ui, "Alternative frequencies (AF)", |ui| {
             let c = &mut self.s.mpx;
-            ch |= ui.add(egui::TextEdit::singleline(&mut c.af).hint_text("e.g. 94.3, 101.5, 105.0").desired_width(ui.available_width())).changed();
+            let edit = self.af_edit.get_or_insert_with(|| c.af.clone());
+            let r = ui.add(egui::TextEdit::singleline(edit).hint_text("e.g. 94.3, 101.5, 105.0").desired_width(ui.available_width()));
+            if r.lost_focus() {
+                // written back tidy: "957 1015" becomes "95.7, 101.5"
+                let codes = radiomoon_mpx::mpxdsp::parse_af(edit);
+                let tidy = codes.iter().map(|&k| format!("{:.1}", radiomoon_mpx::mpxdsp::af_mhz(k))).collect::<Vec<_>>().join(", ");
+                let tidy = if codes.is_empty() { edit.trim().to_string() } else { tidy };
+                if tidy != c.af {
+                    c.af = tidy;
+                    ch = true;
+                }
+                self.af_edit = None;
+            } else if !r.has_focus() {
+                // not being edited: follow the settings
+                self.af_edit = None;
+            } else if self.af_edit.as_deref() != Some(c.af.as_str()) {
+                ui.label(RichText::new("Press Enter (or click elsewhere) to send the new list.").small().color(look::WARN));
+            }
             let codes = radiomoon_mpx::mpxdsp::parse_af(&c.af);
             let list: Vec<String> = codes.iter().map(|&k| format!("{:.1}", radiomoon_mpx::mpxdsp::af_mhz(k))).collect();
             ui.label(
@@ -556,9 +577,40 @@ impl App {
             ui.add_enabled_ui(c.ct_on, |ui| {
                 ui.horizontal(|ui| {
                     cap(ui, "Local time offset");
-                    ch |= ui.add(egui::DragValue::new(&mut c.ct_offset_h).range(-12.0..=14.0).speed(0.5).fixed_decimals(1).prefix("UTC ")).changed();
-                    ui.label(RichText::new("Greece: +2 in winter, +3 in summer").small().color(look::DIM));
+                    ch |= ui.add(egui::DragValue::new(&mut c.ct_offset_h).range(-12.0..=14.0).speed(0.5).fixed_decimals(1).prefix("UTC ")).on_hover_text("The standard (winter) offset when daylight saving time is automatic").changed();
+                    ui.label(RichText::new(if c.ct_dst == "off" { "Greece: +2 in winter, +3 in summer" } else { "standard (winter) time; Greece: +2" }).small().color(look::DIM));
                 });
+                ui.horizontal(|ui| {
+                    cap(ui, "Daylight saving");
+                    let name = |k: &str| match k {
+                        "eu" => "Automatic (Europe)",
+                        "us" => "Automatic (USA / Canada)",
+                        _ => "Off (fixed offset)",
+                    };
+                    egui::ComboBox::from_id_salt("ctdst").width(170.0).selected_text(name(&c.ct_dst)).show_ui(ui, |ui| {
+                        for k in ["eu", "us", "off"] {
+                            ch |= ui.selectable_value(&mut c.ct_dst, k.to_string(), name(k)).changed();
+                        }
+                    });
+                });
+                // what is sent now
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                let d = radiomoon_mpx::mpx::rds_of(c, "");
+                let off = radiomoon_mpx::mpxdsp::ct_offset_now(&d, secs);
+                let summer = off != d.ct_offset;
+                let local = secs + off as i64 * 1800;
+                ui.label(
+                    RichText::new(format!(
+                        "Sent now: {:02}:{:02}, UTC{:+}{} {}",
+                        local.rem_euclid(86_400) / 3600,
+                        local.rem_euclid(3600) / 60,
+                        off / 2,
+                        if off % 2 != 0 { ":30" } else { "" },
+                        if c.ct_dst == "off" { "" } else if summer { "(summer time)" } else { "(winter time)" }
+                    ))
+                    .small()
+                    .color(look::DIM),
+                );
             });
             ui.label(RichText::new("The time comes from this computer's clock (UTC); keep it synchronised.").small().color(look::DIM));
         });
@@ -688,6 +740,46 @@ impl App {
                         .on_hover_text("DSCP class written into every packet, so routers and switches with QoS give the MPX priority");
                         restart |= ui.add(egui::DragValue::new(&mut t.dscp).range(0..=63).prefix("DSCP ")).changed();
                     });
+                    // protection: password (encryption), FEC (UDP)
+                    ui.horizontal_wrapped(|ui| {
+                        cap(ui, "Password");
+                        let id = egui::Id::new(("pwshow", i));
+                        let show = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                        restart |= ui
+                            .add(egui::TextEdit::singleline(&mut t.password).password(!show).hint_text("none: not encrypted").desired_width(120.0))
+                            .on_hover_text("Encrypts the stream (ChaCha20-Poly1305). The receiver needs the same password; others cannot play it or send a false stream to it.")
+                            .changed();
+                        if !t.password.is_empty() && ui.small_button(if show { "Hide" } else { "Show" }).clicked() {
+                            ui.data_mut(|d| d.insert_temp(id, !show));
+                        }
+                        if t.proto != "tcp" {
+                            egui::ComboBox::from_id_salt(("fec", i)).width(150.0).selected_text(if t.fec == 0 { "FEC off".to_string() } else { format!("FEC {}", radiomoon_mpx::protect::fec_name(t.fec)) }).show_ui(ui, |ui| {
+                                ui.label(RichText::new("Forward error correction: extra packets that restore lost ones").small().color(look::DIM));
+                                for n in radiomoon_mpx::protect::FEC_CHOICES {
+                                    let note = match n {
+                                        0 => "",
+                                        20 => " - good networks",
+                                        10 => " - internet, recommended",
+                                        _ => " - lossy links (radio, mobile)",
+                                    };
+                                    restart |= ui.selectable_value(&mut t.fec, n, format!("{}{note}", radiomoon_mpx::protect::fec_name(n))).changed();
+                                }
+                            })
+                            .response
+                            .on_hover_text("One FEC packet for every n packets restores one lost packet of them. Needs the Receiver 1.10.0 or newer.");
+                            if t.fec > 0 {
+                                let shown = |d: u8| if d <= 1 { "single losses".to_string() } else { format!("bursts of {d}") };
+                                egui::ComboBox::from_id_salt(("burst", i)).width(110.0).selected_text(shown(t.fec_burst)).show_ui(ui, |ui| {
+                                    for d in radiomoon_mpx::protect::DEPTH_CHOICES {
+                                        restart |= ui.selectable_value(&mut t.fec_burst, d, format!("Restores {}", shown(d))).changed();
+                                    }
+                                })
+                                .response
+                                .on_hover_text("Burst protection: also restores this many packets lost in a row (interleaved FEC), at the cost of more delay");
+                                ui.label(RichText::new(format!("+{:.0} ms delay", t.fec_delay_ms())).small().color(look::DIM));
+                            }
+                        }
+                    });
                     if let Some(l) = live {
                         let saving = if t.codec != "l24" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
@@ -728,7 +820,8 @@ impl eframe::App for App {
         let svc = self.host.state();
         if self.first {
             self.first = false;
-            if self.s.mpx.autostart && !svc.installed {
+            let plugin = status::read::<TxStatus>(&status::path_for(&cfg_path()), |s| s.time_ms).map(|s| s.engine == "plugin").unwrap_or(false);
+            if self.s.mpx.autostart && !svc.installed && !plugin {
                 self.start();
             }
         }
@@ -902,6 +995,7 @@ fn main() -> eframe::Result<()> {
                 fit_last: 0.0,
                 ports: radiomoon_mpx::clock::serial_ports(),
                 finder: None,
+                af_edit: None,
             }))
         }),
     )

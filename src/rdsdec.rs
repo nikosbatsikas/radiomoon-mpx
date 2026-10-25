@@ -129,6 +129,9 @@ pub struct RdsDecoder {
     rt: [u8; 64],
     rt_seen: u64,
     rt_ab: Option<bool>,
+    /// AF list being received: the count announced by 224 + n, and the frequencies so far
+    af_expect: usize,
+    af_build: Vec<f32>,
     /// Average magnitude of the RDS signal after filtering (see `level`).
     mag: f64,
     pub info: RdsInfo,
@@ -150,6 +153,8 @@ impl RdsDecoder {
             q2: Decim::new(2_400.0, fs / 8.0, 97, 1),
             cyc: 0.0,
             prev_i: 0.0,
+            af_expect: 0,
+            af_build: Vec::new(),
             samples: Vec::with_capacity(64),
             energy: [0.0; 16],
             since_bit: 0,
@@ -338,15 +343,26 @@ impl RdsDecoder {
                 self.info.ta = (b >> 4) & 1 == 1;
                 self.info.music = (b >> 3) & 1 == 1;
                 if let (false, Some(c)) = (version_b, c) {
-                    // AF method A: two codes per group; 224 + n announces the count
+                    // AF method A: two codes per group; 224 + n starts the list of n frequencies. The list is
+                    // shown when it came complete, and replaced by each new complete list, so a changed list
+                    // never keeps old frequencies
                     for code in [(c >> 8) as u8, c as u8] {
-                        if (1..=204).contains(&code) {
+                        if (225..=249).contains(&code) {
+                            self.af_expect = (code - 224) as usize;
+                            self.af_build.clear();
+                        } else if (1..=204).contains(&code) {
                             let f = 87.5 + code as f32 / 10.0;
-                            if !self.info.af.iter().any(|x| (x - f).abs() < 0.05) && self.info.af.len() < 25 {
-                                self.info.af.push(f);
+                            if self.af_expect > 0 && self.af_build.len() < self.af_expect && !self.af_build.iter().any(|x| (x - f).abs() < 0.05) {
+                                self.af_build.push(f);
+                                if self.af_build.len() == self.af_expect {
+                                    self.info.af = self.af_build.clone();
+                                }
                             }
                         } else if code == 224 {
-                            self.info.af.clear(); // "no AF"
+                            // "no AF"
+                            self.info.af.clear();
+                            self.af_build.clear();
+                            self.af_expect = 0;
                         }
                     }
                 }
@@ -527,6 +543,15 @@ mod tests {
         }
         // never a mix of two pages
         assert!(seen.iter().all(|s| s.trim().is_empty() || pages.contains(s)), "{seen:?}");
+        // a changed list replaces the old one (no old frequencies left, e.g. "95" while typing "95.7")
+        gen.set_rds(RdsData { af: parse_af("95.7"), ..gen.comp.rds.data.clone() });
+        for blk in 0..300 {
+            let inp: Vec<f32> = (0..441).flat_map(|i| [0.3 * (6.283 * 440.0 * (blk * 441 + i) as f32 / 44_100.0).sin(); 2]).collect();
+            out.clear();
+            gen.process(&inp, &mut out);
+            dec.push(&out);
+        }
+        assert_eq!(dec.info.af, vec![95.7]);
     }
 
     #[test]

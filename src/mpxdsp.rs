@@ -45,11 +45,13 @@ pub struct RdsData {
     pub ct: bool,
     /// Local time offset of the clock time, half hours (e.g. +6 = UTC+3).
     pub ct_offset: i8,
+    /// Daylight saving time added to `ct_offset` automatically: 0 = none, 1 = EU rule, 2 = US / Canada rule.
+    pub ct_dst: u8,
 }
 
 impl Default for RdsData {
     fn default() -> Self {
-        RdsData { enabled: true, pi: 0x1234, ps: "RADIOMON".into(), rt: "RadioMoon".into(), pty: 10, tp: false, ta: false, music: true, af: Vec::new(), ct: false, ct_offset: 0 }
+        RdsData { enabled: true, pi: 0x1234, ps: "RADIOMON".into(), rt: "RadioMoon".into(), pty: 10, tp: false, ta: false, music: true, af: Vec::new(), ct: false, ct_offset: 0, ct_dst: 0 }
     }
 }
 
@@ -64,11 +66,73 @@ pub fn af_mhz(code: u8) -> f32 {
     87.5 + code as f32 / 10.0
 }
 
+/// Day count (days since 1970-01-01) of a date (proleptic Gregorian).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m as i64 + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Year of a day count.
+fn year_of(days: i64) -> i64 {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    yoe + era * 400 + if m <= 2 { 1 } else { 0 }
+}
+
+/// Day count of the n-th Sunday of a month (n = 1, 2 ...; 0 = the last one).
+fn sunday(y: i64, m: u32, n: u32) -> i64 {
+    // 1970-01-01 was a Thursday: (days + 4) % 7 == 0 is a Sunday
+    if n == 0 {
+        let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+        let last = days_from_civil(ny, nm, 1) - 1;
+        last - (last + 4).rem_euclid(7)
+    } else {
+        let first = days_from_civil(y, m, 1);
+        first + (7 - (first + 4).rem_euclid(7)) % 7 + 7 * (n as i64 - 1)
+    }
+}
+
+/// Whether daylight saving time is in effect at `secs` (Unix time, UTC). `rule`: 1 = EU (last Sunday of March
+/// 01:00 UTC to last Sunday of October 01:00 UTC), 2 = US / Canada (second Sunday of March 02:00 local to first
+/// Sunday of November 02:00 local), anything else = never. `std_half_hours`: the standard (winter) offset.
+pub fn dst_active(rule: u8, secs: i64, std_half_hours: i8) -> bool {
+    let y = year_of(secs.div_euclid(86_400));
+    let std = std_half_hours as i64 * 1800;
+    let (start, end) = match rule {
+        1 => (sunday(y, 3, 0) * 86_400 + 3600, sunday(y, 10, 0) * 86_400 + 3600),
+        2 => (sunday(y, 3, 2) * 86_400 + 7200 - std, sunday(y, 11, 1) * 86_400 + 7200 - std - 3600),
+        _ => return false,
+    };
+    secs >= start && secs < end
+}
+
+/// The local time offset (half hours) sent in CT at `secs`, with daylight saving time when it applies.
+pub fn ct_offset_now(d: &RdsData, secs: i64) -> i8 {
+    let off = d.ct_offset.clamp(-31, 31);
+    if dst_active(d.ct_dst, secs, off) {
+        (off + 2).min(31)
+    } else {
+        off
+    }
+}
+
 /// Parses "94.3, 101.5 105.0" into AF codes (at most 25, no doubles).
 pub fn parse_af(text: &str) -> Vec<u8> {
     let mut v: Vec<u8> = Vec::new();
     for t in text.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|t| !t.is_empty()) {
-        if let Some(c) = t.replace(',', ".").parse::<f32>().ok().and_then(af_code) {
+        // "957" or "1015" without the dot means 95.7 / 101.5 MHz
+        let f = t.replace(',', ".").parse::<f32>().ok().map(|f| if !t.contains(['.', ',']) && (876.0..=1079.0).contains(&f) { f / 10.0 } else { f });
+        if let Some(c) = f.and_then(af_code) {
             if !v.contains(&c) && v.len() < 25 {
                 v.push(c);
             }
@@ -255,7 +319,7 @@ impl RdsEncoder {
         let d = &self.data;
         let mjd = (secs.div_euclid(86_400) + 40_587) as u32;
         let (hour, min) = (((secs % 86_400) / 3600) as u32, ((secs % 3600) / 60) as u32);
-        let off = d.ct_offset.clamp(-31, 31);
+        let off = ct_offset_now(d, secs);
         let b2 = (4 << 12) | ((d.tp as u16) << 10) | ((d.pty as u16 & 31) << 5) | ((mjd >> 15) & 3) as u16;
         let b3 = (((mjd & 0x7FFF) << 1) | (hour >> 4)) as u16;
         let b4 = (((hour & 15) << 12) | (min << 6) | (if off < 0 { 1 << 5 } else { 0 }) | off.unsigned_abs() as u32) as u16;
@@ -638,6 +702,39 @@ pub fn from_l24(bytes: &[u8], out: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn af_without_dot() {
+        assert_eq!(parse_af("957, 1015 87.6 95"), vec![af_code(95.7).unwrap(), af_code(101.5).unwrap(), af_code(87.6).unwrap(), af_code(95.0).unwrap()]);
+        assert_eq!(parse_af("95.7 957"), vec![af_code(95.7).unwrap()]);
+    }
+
+    #[test]
+    fn daylight_saving() {
+        let at = |y, m, d, h: i64, min: i64| days_from_civil(y, m, d) * 86_400 + h * 3600 + min * 60;
+        assert_eq!(sunday(2026, 3, 0), days_from_civil(2026, 3, 29));
+        assert_eq!(sunday(2026, 10, 0), days_from_civil(2026, 10, 25));
+        assert_eq!(sunday(2026, 3, 2), days_from_civil(2026, 3, 8));
+        assert_eq!(sunday(2026, 11, 1), days_from_civil(2026, 11, 1));
+        assert_eq!(sunday(2027, 3, 0), days_from_civil(2027, 3, 28));
+        assert_eq!(year_of(days_from_civil(2026, 12, 31)), 2026);
+        assert_eq!(year_of(days_from_civil(2027, 1, 1)), 2027);
+        let gr = RdsData { ct_offset: 4, ct_dst: 1, ..RdsData::default() };
+        // Greece 2026: summer time from 29 March 01:00 UTC to 25 October 01:00 UTC
+        assert_eq!(ct_offset_now(&gr, at(2026, 3, 29, 0, 59)), 4);
+        assert_eq!(ct_offset_now(&gr, at(2026, 3, 29, 1, 0)), 6);
+        assert_eq!(ct_offset_now(&gr, at(2026, 7, 1, 12, 0)), 6);
+        assert_eq!(ct_offset_now(&gr, at(2026, 10, 25, 0, 59)), 6);
+        assert_eq!(ct_offset_now(&gr, at(2026, 10, 25, 1, 0)), 4);
+        assert_eq!(ct_offset_now(&gr, at(2026, 12, 24, 12, 0)), 4);
+        assert_eq!(ct_offset_now(&RdsData { ct_dst: 0, ..gr.clone() }, at(2026, 7, 1, 12, 0)), 4);
+        // New York (UTC-5): 8 March 2026 07:00 UTC to 1 November 2026 06:00 UTC
+        let ny = RdsData { ct_offset: -10, ct_dst: 2, ..RdsData::default() };
+        assert_eq!(ct_offset_now(&ny, at(2026, 3, 8, 6, 59)), -10);
+        assert_eq!(ct_offset_now(&ny, at(2026, 3, 8, 7, 0)), -8);
+        assert_eq!(ct_offset_now(&ny, at(2026, 11, 1, 5, 59)), -8);
+        assert_eq!(ct_offset_now(&ny, at(2026, 11, 1, 6, 0)), -10);
+    }
 
     #[test]
     fn rds_syndrome() {

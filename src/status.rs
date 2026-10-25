@@ -28,6 +28,8 @@ pub struct TxStatus {
     pub scope: ScopeData,
     /// SFN reference clock (when SFN is on).
     pub clock: Option<crate::clock::ClockState>,
+    /// Who runs the transmitter: "service" or "plugin" (the CLAP plug-in in an audio program).
+    pub engine: String,
 }
 
 /// Status of the MPX Receiver running as a service.
@@ -39,6 +41,19 @@ pub struct RxStatus {
     pub peak: f32,
     pub view: RxView,
     pub scope: ScopeData,
+}
+
+/// Where the Transmitter keeps its settings when it is installed: ProgramData\RadioMoon (Windows) or
+/// ~/.local/share/RadioMoon (Linux, macOS). The service and the CLAP plug-in use the same file.
+pub fn shared_dir() -> PathBuf {
+    let base = std::env::var_os("PROGRAMDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("RadioMoon");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 pub fn now_ms() -> u64 {

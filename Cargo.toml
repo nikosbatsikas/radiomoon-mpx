@@ -1,6 +1,6 @@
 [package]
 name = "radiomoon-mpx"
-version = "1.9.0"
+version = "1.10.0"
 edition = "2021"
 description = "RadioMoon MPX - FM multiplex transmitter and receiver (stereo, RDS, L24 / lossless FLAC over IP)"
 license = "LicenseRef-RadioMoon"
@@ -41,6 +41,10 @@ tray-icon = { version = "=0.26.1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
+
+[workspace]
+members = [".", "clap-plugin"]
+default-members = ["."]
 
 [profile.release]
 opt-level = 3

@@ -3,6 +3,7 @@
 //! (one FLAC frame per RTP packet, or length-prefixed frames over TCP).
 use crate::clock::{ClockState, RefClock};
 use crate::compact;
+use crate::protect::Protector;
 use crate::sfn::{rtp_header_sfn, Timeline};
 use crate::model::{IpTarget, MpxCfg};
 use crate::mpxdsp::{MpxEncoder, MpxParams, RdsData};
@@ -107,6 +108,15 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
         let mut last_status = Instant::now();
         let mut qos_note = String::new();
         let qos = if t.dscp == 0 { String::new() } else { format!(", QoS {}", t.dscp_name()) };
+        let mut prot = Protector::new(&t.password, if tcp { 0 } else { t.fec }, t.fec_burst);
+        let fec_note = if t.fec_burst > 1 { format!("FEC 1/{} x{}", t.fec, t.fec_burst) } else { format!("FEC 1/{}", t.fec) };
+        let pnote = match (prot.encrypted(), !tcp && t.fec > 0) {
+            (true, true) => format!(", encrypted, {fec_note}"),
+            (true, false) => ", encrypted".to_string(),
+            (false, true) => format!(", {fec_note}"),
+            _ => String::new(),
+        };
+        let mut dgrams: Vec<Vec<u8>> = Vec::new();
         while !stop.load(Ordering::Relaxed) {
             if tcp && tcps.is_none() {
                 link_set(&link, |l| {
@@ -131,6 +141,7 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                         } else {
                             Vec::new() // 24-bit PCM: raw stream, as in the first versions
                         };
+                        let start = [prot.tcp_start(), if start.is_empty() { Vec::new() } else { prot.tcp(&start) }].concat();
                         if !start.is_empty() && s.write_all(&start).is_err() {
                             std::thread::sleep(Duration::from_secs(1));
                             continue;
@@ -226,13 +237,22 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                     seq = seq.wrapping_add(1);
                     ts = ts.wrapping_add(pkt as u32);
                 }
-                let wire = payload.len() as u64 + if tcp { TCP_IP_HEADERS } else { UDP_IP_HEADERS };
-                sent += wire;
-                total += wire;
+                let mut wire = 0u64;
                 if let Some(s) = &udp {
-                    let _ = s.send(&payload);
+                    dgrams.clear();
+                    prot.udp(&payload, &mut dgrams);
+                    for d in &dgrams {
+                        let _ = s.send(d);
+                        wire += d.len() as u64 + UDP_IP_HEADERS;
+                    }
+                    sent += wire;
+                    total += wire;
                 } else if let Some(s) = tcps.as_mut() {
-                    if let Err(e) = s.write_all(&payload) {
+                    let b = prot.tcp(&payload);
+                    wire = b.len() as u64 + TCP_IP_HEADERS;
+                    sent += wire;
+                    total += wire;
+                    if let Err(e) = s.write_all(&b) {
                         tcps = None;
                         link_set(&link, |l| {
                             l.ok = false;
@@ -258,7 +278,7 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                     push_hist(&mut l.hist, mbps);
                     if l.ok {
                         let state = if tcp { "Connected" } else { "Sending" };
-                        l.text = if drops == 0 { format!("{state}{qos}{qos_note}") } else { format!("{state}{qos}{qos_note} (buffer overflows: {drops})") };
+                        l.text = if drops == 0 { format!("{state}{pnote}{qos}{qos_note}") } else { format!("{state}{pnote}{qos}{qos_note} (buffer overflows: {drops})") };
                     }
                 });
                 sent = 0;
@@ -308,6 +328,15 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
         let mut last_status = Instant::now();
         let mut qos_note = String::new();
         let qos = if t.dscp == 0 { String::new() } else { format!(", QoS {}", t.dscp_name()) };
+        let mut prot = Protector::new(&t.password, if tcp { 0 } else { t.fec }, t.fec_burst);
+        let fec_note = if t.fec_burst > 1 { format!("FEC 1/{} x{}", t.fec, t.fec_burst) } else { format!("FEC 1/{}", t.fec) };
+        let pnote = match (prot.encrypted(), !tcp && t.fec > 0) {
+            (true, true) => format!(", encrypted, {fec_note}"),
+            (true, false) => ", encrypted".to_string(),
+            (false, true) => format!(", {fec_note}"),
+            _ => String::new(),
+        };
+        let mut dgrams: Vec<Vec<u8>> = Vec::new();
         while !stop.load(Ordering::Relaxed) {
             if tcp && tcps.is_none() {
                 link_set(&link, |l| {
@@ -325,7 +354,8 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                         let _ = s.set_nodelay(true);
                         let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
                         qos_note = set_dscp(socket2::SockRef::from(&s), t.dscp);
-                        if s.write_all(compact::TCP_COMPACT_MAGIC).is_err() {
+                        let start = [prot.tcp_start(), prot.tcp(compact::TCP_COMPACT_MAGIC)].concat();
+                        if s.write_all(&start).is_err() {
                             std::thread::sleep(Duration::from_secs(1));
                             continue;
                         }
@@ -405,13 +435,22 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                         ts = ts.wrapping_add(pkt as u32);
                     }
                     payload.extend_from_slice(&p);
-                    let wire = payload.len() as u64 + if tcp { TCP_IP_HEADERS } else { UDP_IP_HEADERS };
-                    sent += wire;
-                    total += wire;
+                    let mut wire = 0u64;
                     if let Some(s) = &udp {
-                        let _ = s.send(&payload);
+                        dgrams.clear();
+                        prot.udp(&payload, &mut dgrams);
+                        for d in &dgrams {
+                            let _ = s.send(d);
+                            wire += d.len() as u64 + UDP_IP_HEADERS;
+                        }
+                        sent += wire;
+                        total += wire;
                     } else if let Some(s) = tcps.as_mut() {
-                        if let Err(e) = s.write_all(&payload) {
+                        let b = prot.tcp(&payload);
+                        wire = b.len() as u64 + TCP_IP_HEADERS;
+                        sent += wire;
+                        total += wire;
+                        if let Err(e) = s.write_all(&b) {
                             tcps = None;
                             link_set(&link, |l| {
                                 l.ok = false;
@@ -438,7 +477,7 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                     push_hist(&mut l.hist, mbps);
                     if l.ok {
                         let state = if tcp { "Connected" } else { "Sending" };
-                        l.text = if drops == 0 { format!("{state}{qos}{qos_note}") } else { format!("{state}{qos}{qos_note} (buffer overflows: {drops})") };
+                        l.text = if drops == 0 { format!("{state}{pnote}{qos}{qos_note}") } else { format!("{state}{pnote}{qos}{qos_note} (buffer overflows: {drops})") };
                     }
                 });
                 sent = 0;
@@ -476,6 +515,11 @@ pub fn rds_of(c: &MpxCfg, rt: &str) -> RdsData {
         af: crate::mpxdsp::parse_af(&c.af),
         ct: c.ct_on,
         ct_offset: (c.ct_offset_h * 2.0).round().clamp(-31.0, 31.0) as i8,
+        ct_dst: match c.ct_dst.as_str() {
+            "eu" => 1,
+            "us" => 2,
+            _ => 0,
+        },
     }
 }
 
@@ -529,6 +573,10 @@ impl MpxHandle {
             queues.push(q);
         }
         if cfg.ip_on {
+            // the keys of encrypted outputs are made before the outputs start (some ms each), so no output starts late
+            for t in cfg.targets.iter().filter(|t| t.enabled && !t.password.is_empty()) {
+                let _ = crate::crypt::stream_key(&t.password);
+            }
             for t in cfg.targets.iter().filter(|t| t.enabled && !t.host.trim().is_empty()) {
                 let link: Link = Arc::new(Mutex::new(LinkStat { text: "Starting...".into(), ..LinkStat::default() }));
                 if t.is_compact() {
@@ -606,7 +654,9 @@ impl MpxHandle {
                                 music: i.music,
                                 af: i.af.iter().filter_map(|f| crate::mpxdsp::af_code(*f)).collect(),
                                 ct: !i.ct.is_empty(),
+                                // the offset as received already includes daylight saving time
                                 ct_offset: i.ct_offset.unwrap_or(0),
+                                ct_dst: 0,
                             };
                             if let Ok(mut g) = pa.lock() {
                                 *g = (p, r);

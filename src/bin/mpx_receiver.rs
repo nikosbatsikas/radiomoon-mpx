@@ -36,6 +36,10 @@ struct Saved {
     sfn_delay_ms: f64,
     sfn_correction_us: f64,
     clock: ClockCfg,
+    /// Protection: password of an encrypted stream (empty = unencrypted streams only).
+    password: String,
+    /// Allowed senders (addresses / networks; empty = everyone).
+    allow: String,
 }
 
 impl Default for Saved {
@@ -52,6 +56,8 @@ impl Default for Saved {
             sfn_delay_ms: 500.0,
             sfn_correction_us: 0.0,
             clock: ClockCfg::default(),
+            password: String::new(),
+            allow: String::new(),
         }
     }
 }
@@ -87,7 +93,7 @@ fn load() -> Saved {
 
 fn rx_cfg(s: &Saved) -> RxCfg {
     let sfn = (s.sfn_on && s.proto == "udp").then(|| (SfnCfg { delay_ms: s.sfn_delay_ms, correction_us: s.sfn_correction_us }, s.clock.clone()));
-    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn }
+    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn, password: s.password.clone(), allow: s.allow.clone() }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -235,6 +241,9 @@ impl App {
                 if svc.installed {
                     pill(ui, "SERVICE", look::ACCENT);
                 }
+                if live.map(|l| l.v.receiving && l.v.protect.encrypted).unwrap_or(false) {
+                    pill(ui, "ENCRYPTED", look::GOOD);
+                }
                 if let Some(s) = live.and_then(|l| l.v.sfn.as_ref()) {
                     pill(ui, if s.locked { "SFN LOCKED" } else { "SFN" }, if s.locked { look::GOOD } else { look::WARN });
                 }
@@ -340,7 +349,7 @@ impl App {
         });
     }
 
-    fn input_card(&mut self, ui: &mut egui::Ui) -> bool {
+    fn input_card(&mut self, ui: &mut egui::Ui, live: Option<&Live>) -> bool {
         let mut ch = false;
         card(ui, "Input (from the transmitter)", |ui| {
             egui::Grid::new("in").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
@@ -355,6 +364,69 @@ impl App {
                 ui.end_row();
             });
             ui.label(RichText::new("The format is detected automatically: L16 / L20 / L24, FLAC or Compact MPX.").small().color(look::DIM));
+        });
+        card(ui, "Protection", |ui| {
+            egui::Grid::new("prot").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                cap(ui, "Password");
+                ui.horizontal(|ui| {
+                    let id = egui::Id::new("rxpwshow");
+                    let show = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                    ch |= ui.add(egui::TextEdit::singleline(&mut self.s.password).password(!show).hint_text("none").desired_width(150.0)).changed();
+                    if !self.s.password.is_empty() && ui.small_button(if show { "Hide" } else { "Show" }).clicked() {
+                        ui.data_mut(|d| d.insert_temp(id, !show));
+                    }
+                });
+                ui.end_row();
+                cap(ui, "Allowed senders");
+                ch |= ui.add(egui::TextEdit::singleline(&mut self.s.allow).hint_text("everyone, or e.g. 192.168.1.10, 10.0.0.0/8").desired_width(ui.available_width().min(260.0))).changed();
+                ui.end_row();
+            });
+            let bad = radiomoon_mpx::protect::AllowList::invalid(&self.s.allow);
+            if !bad.is_empty() {
+                ui.label(RichText::new(format!("Not an address: {}", bad.join(", "))).small().color(look::WARN));
+            }
+            ui.label(
+                RichText::new(if self.s.password.is_empty() {
+                    "Without a password only unencrypted streams play. With a password only the stream encrypted with the same password plays: nobody else can listen or send a false stream. FEC (set in the Transmitter) is used automatically."
+                } else {
+                    "Only the stream encrypted with this password plays; unencrypted or other streams are ignored. FEC (set in the Transmitter) is used automatically."
+                })
+                .small()
+                .color(look::DIM),
+            );
+            if let Some(l) = live {
+                let p = &l.v.protect;
+                ui.add_space(2.0);
+                let mut lines: Vec<(egui::Color32, String)> = Vec::new();
+                if l.v.receiving {
+                    lines.push(if p.encrypted { (look::GOOD, "Encrypted, password correct".to_string()) } else { (look::DIM, "Not encrypted".to_string()) });
+                    if p.fec_n > 0 {
+                        let burst = if p.fec_depth > 1 { format!(", bursts of {}", p.fec_depth) } else { String::new() };
+                        lines.push((if p.lost > 0 { look::WARN } else { look::GOOD }, format!("FEC 1 per {}{burst}: restored {} packets, could not restore {}", p.fec_n, p.restored, p.lost)));
+                    }
+                }
+                if p.need_password {
+                    lines.push((look::WARN, "An encrypted stream arrives: enter its password".into()));
+                }
+                if p.rejected > 0 {
+                    lines.push((look::BAD, format!("{} packets rejected: wrong password, or changed on the way", p.rejected)));
+                }
+                if p.plain_rejected > 0 {
+                    lines.push((look::WARN, format!("{} unencrypted packets ignored (a password is set)", p.plain_rejected)));
+                }
+                if p.blocked > 0 {
+                    lines.push((look::WARN, format!("{} packets / connections blocked, last from {}", p.blocked, p.blocked_from)));
+                }
+                for (c, t) in lines {
+                    ui.horizontal_wrapped(|ui| {
+                        look::dot(ui, c);
+                        ui.label(t);
+                    });
+                }
+            }
+            if self.rx.is_some() {
+                ui.label(RichText::new("Changes apply after Stop and Start (or Service > Restart).").small().color(look::DIM));
+            }
         });
         ch
     }
@@ -516,7 +588,7 @@ impl eframe::App for App {
                 ui.add_space(4.0);
                 match self.tab {
                     Tab::Rds => self.rds_card(ui, live.as_ref()),
-                    Tab::Input => ch |= self.input_card(ui),
+                    Tab::Input => ch |= self.input_card(ui, live.as_ref()),
                     Tab::Output => ch |= self.output_card(ui, svc.running),
                     Tab::Sfn => ch |= self.sfn_card(ui, live.as_ref(), svc.running),
                     Tab::Service => {
