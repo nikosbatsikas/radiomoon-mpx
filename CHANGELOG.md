@@ -3,6 +3,7 @@
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
 ## 1.12.2
+- **SFN: steady lock with real sound cards.** The playout was locking and unlocking every few seconds: it took the time of each sound card callback as it came, and real drivers (PipeWire, PulseAudio, USB) call back with a jitter of a millisecond or more. A delay-locked loop now smooths the card's timing (wide at the start, then narrowing to 0.02 Hz, following the card's own clock rate), and the lock has a hysteresis (locked within 50 µs, unlocked only beyond 200 µs). Tested: ±1 ms callback jitter stays locked within 25 µs; even ±4 ms stays locked (within about 120 µs) without a restart. New readout *Card jitter* in the SFN tab.
 - **SFN: clear state when nothing plays.** When the sound card cannot be opened (e.g. "does not support 192 kHz output"), the SFN state now says *Not playing* with the reason, instead of staying on "Waiting for time stamps" (the playout only runs while a card plays).
 - **New output "No sound card (test output)"** in the Receiver (window and web page): takes the samples at the pace of 192 kHz and plays nothing, so the link, the analysis, the log and the SFN lock can be tested on a computer without a 192 kHz card.
 - **SFN: clock warning.** When the arrival margin is longer than the delay, the Receiver warns that the Transmitter's clock runs ahead of its own, by how much, and to synchronise the clocks.

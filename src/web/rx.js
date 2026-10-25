@@ -37,7 +37,7 @@ function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
   if(p.need_password)pl.push([C.warn,"An encrypted stream arrives: enter its password"]);if(p.rejected)pl.push([C.bad,p.rejected+" packets rejected (wrong password)"]);
   if(p.plain_rejected)pl.push([C.warn,p.plain_rejected+" unencrypted packets ignored"]);if(p.blocked)pl.push([C.warn,p.blocked+" blocked, last from "+p.blocked_from]);
   const b=v.backup||{};if(b.enabled)pl.push([b.active?C.warn:C.good,b.active?"BACKUP ON AIR"+(v.receiving?" - stream back on air in "+b.return_in_s.toFixed(0)+" s":""):"Stream on air, backup ready ("+(b.level*100).toFixed(0)+"% input level, switched "+b.switches+" times)"]);
-  if(v.sfn){const s=v.sfn;pl.push([s.locked?C.good:C.warn,"SFN: "+s.state+" · error "+s.error_us.toFixed(1)+" µs · "+s.ppm.toFixed(2)+" ppm · margin "+s.margin_ms.toFixed(0)+" ms"]);
+  if(v.sfn){const s=v.sfn;pl.push([s.locked?C.good:C.warn,"SFN: "+s.state+" · error "+s.error_us.toFixed(1)+" µs · "+s.ppm.toFixed(2)+" ppm · margin "+s.margin_ms.toFixed(0)+" ms · card jitter "+(s.card_jitter_us>=1000?(s.card_jitter_us/1000).toFixed(1)+" ms":s.card_jitter_us.toFixed(0)+" µs")]);
    if(S&&s.margin_ms<1e6&&s.margin_ms>S.sfn_delay_ms+20)pl.push([C.warn,"The arrival margin is longer than the delay: the Transmitter's clock is about "+(s.margin_ms-S.sfn_delay_ms).toFixed(0)+" ms ahead of this computer's. Synchronise the clocks."]);}
   if(v.clock)pl.push([v.clock.synced?C.good:C.warn,"Clock: "+v.clock.text]);
   if(pl.length)m.append(card("Protection, backup, SFN",...pl.map(([c,t])=>el("div",{},dot(c),t))));
