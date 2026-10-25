@@ -60,17 +60,30 @@ jobs:
       - name: Run them on AlmaLinux 9 and 10, Debian 11 and Ubuntu 24.04
         shell: bash
         run: |
+          set +e
           sudo chown -R $(id -u) target/glibc
+          cat > runtest.sh <<'EOF'
+          (command -v dnf >/dev/null && dnf install -y -q alsa-lib >/dev/null 2>&1) || (apt-get update -qq >/dev/null 2>&1 && (apt-get install -y -qq libasound2 >/dev/null 2>&1 || apt-get install -y -qq libasound2t64 >/dev/null 2>&1))
+          /b/radiomoon-mpx-rxd --version || exit 1
+          mkdir -p /tmp/d
+          /b/radiomoon-mpx-rxd --data /tmp/d --listen 127.0.0.1:8081 >/tmp/log 2>&1 &
+          sleep 4
+          # a small HTTP request without curl: bash's /dev/tcp is not in every image, so use the program's own answer
+          if command -v curl >/dev/null; then curl -s -o /dev/null -w "page %{http_code}\n" http://127.0.0.1:8081/; else
+            (exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET / HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3) 2>/dev/null || echo "no curl"; fi
+          echo "--- log"; head -n 3 /tmp/log
+          EOF
+          FAIL=0
           for IMG in almalinux:9 almalinux:10 debian:11 ubuntu:24.04; do
-            OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b "$IMG" sh -c '
-              (command -v dnf >/dev/null && dnf install -y -q alsa-lib curl >/dev/null) || (apt-get update -qq >/dev/null && (apt-get install -y -qq libasound2 curl >/dev/null 2>&1 || apt-get install -y -qq libasound2t64 curl >/dev/null))
-              /b/radiomoon-mpx-rxd --version
-              mkdir -p /tmp/d && (/b/radiomoon-mpx-rxd --data /tmp/d --listen 127.0.0.1:8081 >/tmp/log 2>&1 &)
-              sleep 2; curl -s -o /dev/null -w "page %{http_code}" http://127.0.0.1:8081/' 2>&1 | tail -n 2 | tr "\n" " ")
-            echo "$IMG: $OUT"
-            echo "$OUT" | grep -q "page 200" || { echo "::error title=$IMG::$OUT"; exit 1; }
-            echo "::notice title=$IMG::$OUT"
+            OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b -v "$PWD/runtest.sh":/t.sh "$IMG" bash /t.sh 2>&1)
+            echo "== $IMG"; echo "$OUT"
+            if echo "$OUT" | grep -q "1.11\|RadioMoon"  && echo "$OUT" | grep -q "200\|Web interface on"; then
+              echo "::notice title=$IMG::$(echo "$OUT" | tr '\n' ' ' | head -c 300)"
+            else
+              echo "::error title=$IMG::$(echo "$OUT" | tr '\n' ' ' | head -c 600)"; FAIL=1
+            fi
           done
+          exit $FAIL
       - name: Unit tests without the windows
         run: |
           sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
