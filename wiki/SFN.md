@@ -12,3 +12,5 @@ UDP only. The Receiver follows the stamps with a fine resampler, so its sound ca
 - *Not playing: …*: the sound card does not play (it must support **192 kHz**). For a test without such a card choose the output *No sound card (test output)*.
 - *Arrival margin longer than the delay*: the Transmitter's clock runs ahead of the Receiver's — synchronise the clocks (NTP / chrony at least; GPS PPS or PTP for real SFN).
 - *Late*: the packets arrive after their playout time — increase the delay.
+- *The clock was stepped …*: a time service sets the clock in steps (e.g. the Windows time service). Every step moves this site against the others; use a service that adjusts smoothly (chrony, ptp4l + phc2sys, Meinberg NTP on Windows) or GPS / PTP as the reference clock.
+- *Restarts* with *Last restart: the playout was … ms off*: the timing jumped by more than 20 ms (a clock step, the sound card stopped, or a very busy computer).

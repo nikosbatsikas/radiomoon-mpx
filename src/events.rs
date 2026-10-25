@@ -55,6 +55,8 @@ pub struct Tracker {
     card: String,
     backup: bool,
     sfn_locked: Option<bool>,
+    sfn_restarts: u64,
+    clock_steps: u64,
     // packet counters at the start of the current summary window
     win_start: u64,
     base_lost: u64,
@@ -136,6 +138,16 @@ impl Tracker {
                     Self::ev(&mut out, now, 1, format!("SFN not locked: {}", s.state));
                 }
                 self.sfn_locked = Some(s.locked);
+            }
+            if s.resyncs > self.sfn_restarts {
+                if self.sfn_restarts > 0 && !s.last_restart.is_empty() {
+                    Self::ev(&mut out, now, 1, format!("SFN playout started anew: {}", s.last_restart));
+                }
+                self.sfn_restarts = s.resyncs;
+            }
+            if s.clock_steps > self.clock_steps {
+                Self::ev(&mut out, now, 1, format!("The reference clock stepped by {:+.1} ms (e.g. the system clock set by the time service); SFN follows it", s.last_clock_step_ms));
+                self.clock_steps = s.clock_steps;
             }
         }
         // the sound card: only a change of its state, not of the numbers in its text (buffer ms, underruns ...)

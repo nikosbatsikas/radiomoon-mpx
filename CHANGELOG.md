@@ -2,6 +2,10 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.4
+- **SFN: why it restarts or is off.** The Receiver now notices when the reference clock *steps* (e.g. the system clock set by the Windows time service) and shows how often and by how much, with the advice to use a time service that adjusts smoothly (chrony, ptp4l, Meinberg NTP) or GPS / PTP. Each restart of the playout shows its reason (how far it was off). Both are also in the Log.
+- **SFN: fast back after a step.** When the error stays beyond the limit for 2 s while the loop is slow (a step of the clock or of the card's latency), the loop is made fast again instead of taking minutes: a 3 ms step is locked again in about 12 s, without a restart and without a break in the sound.
+
 ## 1.12.3
 - **SFN: no more locking / unlocking.** In 1.12.2 two control loops (one smoothing the sound card's timing, one setting the playout rate) worked against each other: the rate swung by tens of ppm and the lock came and went every 10 - 40 seconds, more with FLAC and Opus (more processor load). Now one control loop does both: it locks in about 3 seconds, then narrows step by step (0.5 -> 0.1 -> 0.02 -> 0.006 Hz) to average out the jitter of the card's callbacks. The lock limits follow how exactly the error can be measured.
 - **A busy computer no longer restarts the playout:** a single late or early callback is not used; the playout starts anew only when it stays more than 20 ms off for a quarter of a second.
