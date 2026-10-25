@@ -189,7 +189,11 @@ EOF
     chmod 755 "/etc/init.d/$n"
     rc-update add "$n" default >/dev/null
     [ -e /etc/init.d/alsasound ] && rc-update add alsasound boot >/dev/null 2>&1 || true
-    rc-service "$n" restart >/dev/null 2>&1 || rc-service "$n" start
+    if ! rc-service "$n" restart; then
+      echo "Could not start $n. Its log ($LOGS/$s.log):" >&2
+      tail -n 20 "$LOGS/$s.log" >&2 2>/dev/null || true
+      exit 1
+    fi
   else
     cat >"/etc/systemd/system/$n.service" <<EOF
 [Unit]
@@ -214,7 +218,10 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable "$n" >/dev/null 2>&1
-    systemctl restart "$n"
+    if ! systemctl restart "$n"; then
+      journalctl -u "$n" -n 20 --no-pager >&2 || true
+      exit 1
+    fi
   fi
 done
 
