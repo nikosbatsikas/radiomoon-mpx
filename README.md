@@ -34,7 +34,7 @@ For Linux servers, Raspberry Pi and **Alpine Linux** without a desktop: `radiomo
 wget -qO- https://raw.githubusercontent.com/nikosbatsikas/radiomoon-mpx/main/packaging/headless/install.sh | sudo sh -s -- receiver
 ```
 
-(`transmitter`, `both` or `uninstall`; on Alpine as root without `sudo`). The installer adds the ALSA packages, a service user, an OpenRC (Alpine) or systemd service and asks for the web password. Supported: Alpine x86_64 / aarch64, Debian 12+, Ubuntu 22.04+, Raspberry Pi OS 64-bit (bookworm+). The page is plain HTTP: keep it inside your network or use a VPN / SSH tunnel. Details: [Wiki: Headless and Web Interface](../../wiki/Headless-and-Web-Interface), [Alpine Linux](../../wiki/Alpine-Linux).
+(`transmitter`, `both` or `uninstall`; on Alpine as root without `sudo`). The installer adds the ALSA packages, a service user, an OpenRC (Alpine) or systemd service and asks for the web password. Supported: Alpine x86_64 / aarch64, Debian 10+, Ubuntu 20.04+, Raspberry Pi OS 64-bit, AlmaLinux / Rocky / RHEL 8+ and Fedora (firewalld and SELinux are handled). The page is plain HTTP: keep it inside your network or use a VPN / SSH tunnel. Details: [Wiki: Headless and Web Interface](../../wiki/Headless-and-Web-Interface), [Alpine Linux](../../wiki/Alpine-Linux).
 
 ## Receiver log
 

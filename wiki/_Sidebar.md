@@ -15,6 +15,7 @@
 **Headless (no desktop)**
 - [[Headless and Web Interface]]
 - [[Alpine Linux]]
+- [[AlmaLinux]]
 - [[Raspberry Pi]]
 
 **Tips**

@@ -1,7 +1,8 @@
 #!/bin/sh
 # RadioMoon MPX - installer of the headless editions (no desktop; web interface) for
 #   Alpine Linux (OpenRC)            x86_64, aarch64 (Raspberry Pi 3/4/5)
-#   Debian / Ubuntu / Raspberry Pi OS (systemd), 64-bit: x86_64, aarch64 (Debian 12 "bookworm" or newer)
+#   Debian / Ubuntu / Raspberry Pi OS (systemd), 64-bit: x86_64, aarch64 (Debian 10 or newer, Ubuntu 20.04 or newer)
+#   AlmaLinux / Rocky Linux / RHEL / CentOS Stream / Fedora (systemd, dnf), version 8 or newer; firewalld and SELinux are handled
 #
 # One command (downloads the latest release):
 #   wget -qO- https://raw.githubusercontent.com/nikosbatsikas/radiomoon-mpx/main/packaging/headless/install.sh | sh -s -- receiver
@@ -33,7 +34,9 @@ elif command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then IN
 else die "neither OpenRC nor systemd found"; fi
 if command -v apk >/dev/null 2>&1; then PKG=apk; LIBC=alpine
 elif command -v apt-get >/dev/null 2>&1; then PKG=apt; LIBC=linux
-else die "this installer knows Alpine (apk) and Debian / Ubuntu / Raspberry Pi OS (apt)"; fi
+elif command -v dnf >/dev/null 2>&1; then PKG=dnf; LIBC=linux
+elif command -v yum >/dev/null 2>&1; then PKG=yum; LIBC=linux
+else die "this installer knows Alpine (apk), Debian / Ubuntu / Raspberry Pi OS (apt) and AlmaLinux / Rocky / RHEL / Fedora (dnf)"; fi
 case "$(uname -m)" in
   x86_64|amd64) ARCH=x86_64; GARCH=x64 ;;
   aarch64|arm64) ARCH=aarch64; GARCH=arm64 ;;
@@ -85,7 +88,10 @@ fi
 # ---------------------------------------------------------------- packages
 say "System: $LIBC ($PKG, $INIT), $ARCH"
 if [ "$PKG" = apk ]; then
-  apk add --no-cache alsa-lib alsa-utils ca-certificates >/dev/null
+  # libgcc: the GCC runtime the programs are linked with (not in a minimal Alpine)
+  apk add --no-cache libgcc alsa-lib alsa-utils ca-certificates >/dev/null
+elif [ "$PKG" = dnf ] || [ "$PKG" = yum ]; then
+  "$PKG" install -y -q alsa-lib alsa-utils ca-certificates wget tar gzip >/dev/null
 else
   DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2 alsa-utils ca-certificates wget >/dev/null || \
@@ -114,7 +120,10 @@ fi
 # the service user (in the audio group, for the sound cards; dialout for a GPS receiver)
 if ! id "$SVCUSER" >/dev/null 2>&1; then
   if [ "$PKG" = apk ]; then adduser -S -D -H -h "$DATA" -s /sbin/nologin -G audio "$SVCUSER"
-  else useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin --gid audio "$SVCUSER"; fi
+  else
+    NOLOGIN=/usr/sbin/nologin; [ -x "$NOLOGIN" ] || NOLOGIN=/sbin/nologin
+    useradd --system --home-dir "$DATA" --shell "$NOLOGIN" --gid audio "$SVCUSER"
+  fi
 fi
 for g in audio dialout; do
   if grep -q "^$g:" /etc/group; then
@@ -129,7 +138,16 @@ for s in $(svc_names); do
   stop_service "$s"
   install -m 755 "$SRC/radiomoon-mpx-$s" "$PREFIX/radiomoon-mpx-$s"
 done
-VER="$("$PREFIX/radiomoon-mpx-$(svc_names | cut -d' ' -f1)" --version 2>/dev/null || echo "RadioMoon MPX")"
+# SELinux (AlmaLinux / RHEL / Fedora): the usual labels for programs and data
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -R "$PREFIX"/radiomoon-mpx-* "$DATA" "$LOGS" >/dev/null 2>&1 || true
+fi
+B1="$PREFIX/radiomoon-mpx-$(svc_names | cut -d' ' -f1)"
+if ! "$B1" --version >/dev/null 2>&1; then
+  "$B1" --version || true
+  die "the program does not run on this system (see the message above; a too old system library?)"
+fi
+VER="$("$B1" --version 2>/dev/null || echo "RadioMoon MPX")"
 say "Installed: $VER"
 
 # ---------------------------------------------------------------- web login
@@ -225,6 +243,20 @@ EOF
     fi
   fi
 done
+
+# ---------------------------------------------------------------- firewall (firewalld: AlmaLinux / RHEL / Fedora)
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  for s in $(svc_names); do
+    if [ "$s" = txd ]; then firewall-cmd -q --permanent --add-port="$TX_PORT/tcp" || true
+    else
+      firewall-cmd -q --permanent --add-port="$RX_PORT/tcp" || true
+      # the default stream port of the Receiver (change it here if you use another one)
+      firewall-cmd -q --permanent --add-port=5004/udp --add-port=5004/tcp || true
+    fi
+  done
+  firewall-cmd -q --reload || true
+  say "firewalld: opened the web port(s)$(echo " $(svc_names)" | grep -q rxd && echo " and the stream port 5004 (UDP and TCP)")"
+fi
 
 # ---------------------------------------------------------------- done
 IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
