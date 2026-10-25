@@ -548,8 +548,12 @@ impl App {
             let edit = self.af_edit.get_or_insert_with(|| c.af.clone());
             let r = ui.add(egui::TextEdit::singleline(edit).hint_text("e.g. 94.3, 101.5, 105.0").desired_width(ui.available_width()));
             if r.lost_focus() {
-                if *edit != c.af {
-                    c.af = edit.clone();
+                // written back tidy: "957 1015" becomes "95.7, 101.5"
+                let codes = radiomoon_mpx::mpxdsp::parse_af(edit);
+                let tidy = codes.iter().map(|&k| format!("{:.1}", radiomoon_mpx::mpxdsp::af_mhz(k))).collect::<Vec<_>>().join(", ");
+                let tidy = if codes.is_empty() { edit.trim().to_string() } else { tidy };
+                if tidy != c.af {
+                    c.af = tidy;
                     ch = true;
                 }
                 self.af_edit = None;

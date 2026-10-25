@@ -130,7 +130,9 @@ pub fn ct_offset_now(d: &RdsData, secs: i64) -> i8 {
 pub fn parse_af(text: &str) -> Vec<u8> {
     let mut v: Vec<u8> = Vec::new();
     for t in text.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|t| !t.is_empty()) {
-        if let Some(c) = t.replace(',', ".").parse::<f32>().ok().and_then(af_code) {
+        // "957" or "1015" without the dot means 95.7 / 101.5 MHz
+        let f = t.replace(',', ".").parse::<f32>().ok().map(|f| if !t.contains(['.', ',']) && (876.0..=1079.0).contains(&f) { f / 10.0 } else { f });
+        if let Some(c) = f.and_then(af_code) {
             if !v.contains(&c) && v.len() < 25 {
                 v.push(c);
             }
@@ -700,6 +702,12 @@ pub fn from_l24(bytes: &[u8], out: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn af_without_dot() {
+        assert_eq!(parse_af("957, 1015 87.6 95"), vec![af_code(95.7).unwrap(), af_code(101.5).unwrap(), af_code(87.6).unwrap(), af_code(95.0).unwrap()]);
+        assert_eq!(parse_af("95.7 957"), vec![af_code(95.7).unwrap()]);
+    }
 
     #[test]
     fn daylight_saving() {
