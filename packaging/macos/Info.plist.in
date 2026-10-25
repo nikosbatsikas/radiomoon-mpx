@@ -12,6 +12,6 @@
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>The MPX Transmitter can use a sound input as its audio source.</string>
+  <key>NSMicrophoneUsageDescription</key><string>RadioMoon MPX can record a sound input: the audio source of the Transmitter, or the backup MPX of the Receiver.</string>
 </dict>
 </plist>

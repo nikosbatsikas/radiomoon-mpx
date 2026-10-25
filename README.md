@@ -58,6 +58,15 @@ The time stamp is an RTP header extension (profile 0x524D, 8 bytes, ns since 197
 
 Enable RadioMoon's internet broadcast (Icecast or Shoutcast) and set the MPX Transmitter's source to **Internet stream** with that URL. RadioMoon sends the title of every song to the server, and the transmitter turns it into the RDS RadioText (*RadioText from the song*). A sound input fed from RadioMoon's output works too, with a fixed RadioText.
 
+## Backup source (Receiver)
+
+Input > **Backup source**: when the stream stops, the Receiver puts the MPX of a sound card input on air - e.g. an analog STL, an off-air receiver, or a local processor with a ready composite signal, recorded at 192 kHz (left or right channel, level in dB).
+
+- **Switch to backup after** (default 1000 ms without stream). The backup input is recorded all the time, so it is on air at once (with a 10 ms fade-in). Also at start, when no stream has come yet.
+- **Back to the stream after** (default 5 s of steady stream), so a stream that comes and goes does not switch back and forth.
+- Optional: also switch when the stream carries silence (its MPX below about -40 dB, e.g. a transmitter running without audio).
+- The header shows **ON BACKUP**; the scope, the RDS panel and the levels show what is on air. In SFN mode the backup is played without time stamps (it is not in step with the other sites).
+
 ## Protection of the stream
 
 Every IP output of the Transmitter (each receiver in the IP tab) has its own protection settings; the Receiver sets its own in Input > *Protection*. Needs Transmitter and Receiver 1.10.0 or newer.
