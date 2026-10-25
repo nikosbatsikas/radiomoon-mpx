@@ -1,6 +1,6 @@
 [package]
 name = "radiomoon_mpx_clap"
-version = "1.12.4"
+version = "1.12.5"
 edition = "2021"
 description = "RadioMoon MPX Transmitter as a CLAP plug-in"
 license = "LicenseRef-RadioMoon"

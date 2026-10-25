@@ -1,0 +1,97 @@
+# Takes screenshots of both programs (every tab) and of the web pages, with demo settings (Transmitter -> Receiver on
+# one machine, Compact Opus with SFN, no sound card), and puts them into the wiki (images/screens).
+name: wiki-screenshots
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**", "packaging/wiki/**", ".github/workflows/wiki-screenshots.yml"]
+permissions:
+  contents: write
+jobs:
+  shots:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: shots
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils libxkbcommon-x11-0 ffmpeg
+      - name: Build
+        run: cargo build --release --bin radiomoon-mpx-transmitter --bin radiomoon-mpx-receiver --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+      - name: Screenshots of the windows
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set +e
+          mkdir -p shots data logs
+          export RADIOMOON_DATA=$PWD/data
+          cp packaging/wiki/demo-transmitter.json data/mpx-transmitter.json
+          cp packaging/wiki/demo-receiver.json data/mpx-receiver.json
+          Xvfb :99 -screen 0 1400x1000x24 & sleep 2
+          export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1
+          glxinfo -B 2>&1 | head -8 || true
+          # demo audio for the Transmitter's stream source: pink noise and a chord, stereo, served over HTTP
+          mkdir -p demo
+          ffmpeg -loglevel error -f lavfi -i "anoisesrc=color=pink:amplitude=0.25:d=900" -f lavfi -i "sine=f=220:d=900" -f lavfi -i "sine=f=330:d=900" \
+            -filter_complex "[0][1]amix=inputs=2[l];[0][2]amix=inputs=2[r];[l][r]join=inputs=2:channel_layout=stereo,volume=0.8[a]" -map "[a]" -ar 44100 -b:a 192k demo/demo.mp3
+          (cd demo && python3 -m http.server 8000 > ../logs/http.log 2>&1 &)
+          sleep 1
+          T=target/release/radiomoon-mpx-transmitter; R=target/release/radiomoon-mpx-receiver
+          grab() { # $1 = window title, $2 = file
+            W=$(timeout 20 xdotool search --sync --onlyvisible --name "^$1\$" | head -n1)
+            if [ -n "$W" ]; then import -window "$W" "shots/$2.png"; else echo "no window $1 for $2"; import -window root "shots/$2-root.png"; fi
+          }
+          # the receiver, then the transmitter keep running while the other one goes through its tabs
+          RM_TAB=rds $R > logs/rx-first.log 2>&1 & RPID=$!
+          sleep 3
+          for TAB in source ip card signal rds sfn service; do
+            RM_TAB=$TAB $T > logs/tx-$TAB.log 2>&1 & TPID=$!
+            sleep 12
+            grab "RadioMoon MPX Transmitter" "transmitter-$TAB"
+            kill $TPID 2>/dev/null; sleep 1
+          done
+          RM_TAB=ip $T > logs/tx-run.log 2>&1 & TPID=$!
+          kill $RPID 2>/dev/null; sleep 1
+          for TAB in rds input output sfn log service; do
+            RM_TAB=$TAB $R > logs/rx-$TAB.log 2>&1 & RPID=$!
+            if [ "$TAB" = sfn ] || [ "$TAB" = log ]; then sleep 40; else sleep 15; fi
+            grab "RadioMoon MPX Receiver" "receiver-$TAB"
+            kill $RPID 2>/dev/null; sleep 1
+          done
+          kill $TPID 2>/dev/null || true
+          ls -l shots
+          echo "::notice title=window shots::$(ls shots | tr '\n' ' ') | tx: $(tail -c 400 logs/tx-source.log | tr '\n' ' ') | rx: $(tail -c 400 logs/rx-first.log | tr '\n' ' ')"
+      - name: Screenshots of the web pages
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          export RADIOMOON_DATA=$PWD/data
+          echo "wiki-demo-pass" | target/release/radiomoon-mpx-txd --data data --set-login admin
+          target/release/radiomoon-mpx-rxd --data data --listen 127.0.0.1:8081 > rxd.log 2>&1 &
+          target/release/radiomoon-mpx-txd --data data --listen 127.0.0.1:8080 > txd.log 2>&1 &
+          pip install -q playwright && python -m playwright install --with-deps chromium > /dev/null
+          (cd demo && python3 -m http.server 8000 > /dev/null 2>&1 &)
+          sleep 60
+          python packaging/wiki/web_shots.py shots wiki-demo-pass
+          ls -l shots
+      - name: Put the screenshots into the wiki
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" w
+          mkdir -p w/images/screens
+          rm -f w/images/screens/*-root.png shots/*-root.png
+          cp shots/*.png w/images/screens/
+          cd w
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "screenshots unchanged"; exit 0; fi
+          git commit -qm "Screenshots from ${GITHUB_SHA::7}"
+          git push -q
+          echo "::notice title=screenshots::$(ls ../shots | tr '\n' ' ')"

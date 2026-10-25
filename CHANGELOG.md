@@ -2,6 +2,11 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.5
+- **SFN: smooth time stamps from the Transmitter (big improvement, above all with Compact Opus).** The generator works in bursts (a stream comes in chunks, Opus packets are 20 ms, a busy computer delays it), and the time line of the stamps followed those bursts within seconds: for a while the stamps ran up to a few thousand ppm too fast or too slow, more than any Receiver can follow (the "SFN: Locking ... 300 ppm" and the short unlocks). The time line now follows the clock only slowly (about 60 s) and never faster than 200 ppm. Measured end to end on one computer: Compact Opus now stays locked within 12 µs with a rate trim of a few ppm (before: up to 400 µs and ±200 ppm); L24 within 9 µs.
+- **Output "No sound card (test output)"** now behaves like a card with an exact clock (it reports when each block would be heard), so a busy computer does not disturb SFN tests with it.
+- **Wiki:** step-by-step installation for Windows, macOS, Linux desktop, headless Linux, Alpine, AlmaLinux and Raspberry Pi; *First Steps*; pages for both programs and the web interface with screenshots of every tab (made automatically by a new workflow with demo settings); *WiFi and Internet Links* (settings for Compact Opus, FEC, SFN delay, testing a bad network); diagrams.
+
 ## 1.12.4
 - **SFN: why it restarts or is off.** The Receiver now notices when the reference clock *steps* (e.g. the system clock set by the Windows time service) and shows how often and by how much, with the advice to use a time service that adjusts smoothly (chrony, ptp4l, Meinberg NTP) or GPS / PTP. Each restart of the playout shows its reason (how far it was off). Both are also in the Log.
 - **SFN: fast back after a step.** When the error stays beyond the limit for 2 s while the loop is slow (a step of the clock or of the card's latency), the loop is made fast again instead of taking minutes: a 3 ms step is locked again in about 12 s, without a restart and without a break in the sound.
