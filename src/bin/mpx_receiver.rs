@@ -6,7 +6,7 @@
 use eframe::egui::{self, RichText};
 use radiomoon_mpx::host::Host;
 use radiomoon_mpx::look::{self, card, pill, Tile};
-use radiomoon_mpx::mpxrx::{RxCfg, RxHandle, RxView};
+use radiomoon_mpx::mpxrx::{BackupCfg, RxCfg, RxHandle, RxView};
 use radiomoon_mpx::mpxscope::{self, Scope};
 use radiomoon_mpx::clock::ClockCfg;
 use radiomoon_mpx::service;
@@ -40,6 +40,8 @@ struct Saved {
     password: String,
     /// Allowed senders (addresses / networks; empty = everyone).
     allow: String,
+    /// Backup MPX from a sound card input, on air while the stream is missing.
+    backup: BackupCfg,
 }
 
 impl Default for Saved {
@@ -58,6 +60,7 @@ impl Default for Saved {
             clock: ClockCfg::default(),
             password: String::new(),
             allow: String::new(),
+            backup: BackupCfg::default(),
         }
     }
 }
@@ -93,7 +96,7 @@ fn load() -> Saved {
 
 fn rx_cfg(s: &Saved) -> RxCfg {
     let sfn = (s.sfn_on && s.proto == "udp").then(|| (SfnCfg { delay_ms: s.sfn_delay_ms, correction_us: s.sfn_correction_us }, s.clock.clone()));
-    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn, password: s.password.clone(), allow: s.allow.clone() }
+    RxCfg { proto: s.proto.clone(), port: s.port, device: s.device.clone(), buffer_ms: s.buffer_ms, sfn, password: s.password.clone(), allow: s.allow.clone(), backup: s.backup.clone() }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -126,6 +129,8 @@ struct App {
     s: Saved,
     rx: Option<RxHandle>,
     devs: Vec<String>,
+    /// Sound inputs (for the backup source).
+    ins: Vec<String>,
     first: bool,
     host: Host,
     svc: Option<RxStatus>,
@@ -240,6 +245,9 @@ impl App {
                 }
                 if svc.installed {
                     pill(ui, "SERVICE", look::ACCENT);
+                }
+                if live.map(|l| l.v.backup.active).unwrap_or(false) {
+                    pill(ui, "ON BACKUP", look::WARN);
                 }
                 if live.map(|l| l.v.receiving && l.v.protect.encrypted).unwrap_or(false) {
                     pill(ui, "ENCRYPTED", look::GOOD);
@@ -426,6 +434,62 @@ impl App {
             }
             if self.rx.is_some() {
                 ui.label(RichText::new("Changes apply after Stop and Start (or Service > Restart).").small().color(look::DIM));
+            }
+        });
+        card(ui, "Backup source (MPX from a sound card input)", |ui| {
+            let b = &mut self.s.backup;
+            ch |= ui.checkbox(&mut b.on, "When the stream stops, put the MPX of a sound input on air").changed();
+            ui.label(
+                RichText::new("For an analog backup: an STL / off-air receiver, a local processor or a second line with a ready composite (MPX) signal, recorded at 192 kHz. It is switched back to the stream when the stream has come back without a break.")
+                    .small()
+                    .color(look::DIM),
+            );
+            ui.add_enabled_ui(b.on, |ui| {
+                egui::Grid::new("bk").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                    cap(ui, "Sound input (192 kHz)");
+                    let shown = if b.device.is_empty() { "Default".to_string() } else { b.device.clone() };
+                    egui::ComboBox::from_id_salt("bkdev").width(230.0).selected_text(shown).show_ui(ui, |ui| {
+                        ch |= ui.selectable_value(&mut b.device, String::new(), "Default").changed();
+                        for d in &self.ins {
+                            ch |= ui.selectable_value(&mut b.device, d.clone(), d).changed();
+                        }
+                    });
+                    ui.end_row();
+                    cap(ui, "Channel");
+                    ui.horizontal(|ui| {
+                        ch |= ui.selectable_value(&mut b.channel, 0, "Left").changed();
+                        ch |= ui.selectable_value(&mut b.channel, 1, "Right").changed();
+                    });
+                    ui.end_row();
+                    cap(ui, "Level");
+                    ch |= ui.add(egui::DragValue::new(&mut b.gain_db).range(-24.0..=24.0).speed(0.1).fixed_decimals(1).suffix(" dB")).on_hover_text("Match the deviation of the backup to the stream").changed();
+                    ui.end_row();
+                    cap(ui, "Switch to backup after");
+                    ch |= ui.add(egui::DragValue::new(&mut b.timeout_ms).range(100..=30_000).speed(10.0).suffix(" ms without stream")).changed();
+                    ui.end_row();
+                    cap(ui, "Back to the stream after");
+                    ch |= ui.add(egui::DragValue::new(&mut b.return_s).range(0.0..=600.0).speed(0.5).fixed_decimals(0).suffix(" s of steady stream")).changed();
+                    ui.end_row();
+                });
+                ch |= ui.checkbox(&mut b.on_silence, "Also when the stream carries silence (MPX below -40 dB)").changed();
+            });
+            if let Some(l) = live.filter(|l| l.v.backup.enabled) {
+                let bv = &l.v.backup;
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    if bv.active {
+                        look::dot(ui, look::WARN);
+                        let back = if l.v.receiving { format!(" - the stream is back, on air in {:.0} s", bv.return_in_s) } else { String::new() };
+                        ui.label(RichText::new(format!("BACKUP ON AIR{back}")).strong().color(look::WARN));
+                    } else {
+                        look::dot(ui, look::GOOD);
+                        ui.label("Stream on air, backup ready");
+                    }
+                    ui.label(RichText::new(format!("· input level {:.0}% · switched {} times", bv.level * 100.0, bv.switches)).small().color(look::DIM));
+                });
+                if !bv.input.is_empty() {
+                    ui.label(RichText::new(&bv.input).small().color(look::DIM));
+                }
             }
         });
         ch
@@ -652,6 +716,7 @@ fn main() -> eframe::Result<()> {
                 s,
                 rx: None,
                 devs,
+                ins: radiomoon_mpx::srcin::list_inputs(),
                 first: true,
                 host,
                 svc: None,

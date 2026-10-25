@@ -3,6 +3,7 @@
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
 ## 1.10.0
+- **Backup MPX source (Receiver):** Input > Backup source. When the stream stops (after a set time, default 1 s), the MPX of a sound card input (192 kHz, left or right, level in dB) goes on air - an analog STL, an off-air receiver or a local processor - and the stream goes back on air after it has come without a break for a set time (default 5 s). Optionally also when the stream carries silence. The header shows ON BACKUP; scope, RDS and levels follow what is on air.
 - **Protection of the MPX stream**, per IP output (Transmitter) and in Input > Protection (Receiver):
   - **Password / encryption:** ChaCha20-Poly1305 with a key from the password (PBKDF2-HMAC-SHA256). Only a Receiver with the same password can play the stream, and every packet is authenticated, so nobody can send a false or changed stream to the transmitter site. Over UDP and TCP, with all formats and SFN. A Receiver with a password ignores unencrypted streams; the header shows ENCRYPTED.
   - **FEC (UDP):** one recovery packet for every 20, 10 or 5 packets restores a lost packet; *burst protection* (interleaving 2 / 4 / 8) also restores several packets lost in a row. The extra delay is shown next to the setting. The Receiver shows the restored packets.

@@ -12,7 +12,7 @@ use crate::sfn::{SfnCfg, SfnPlayout, SfnStatus};
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{TcpListener, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -28,9 +28,78 @@ pub struct RxCfg {
     pub password: String,
     /// Allowed senders: addresses / networks (empty = everyone).
     pub allow: String,
+    /// Backup MPX from a sound card input when the stream stops.
+    pub backup: BackupCfg,
+}
+
+/// Backup source of the receiver: a ready MPX signal from a sound card input (e.g. an analog link, an off-air
+/// receiver or a local processor), put on air when the IP stream stops.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BackupCfg {
+    pub on: bool,
+    /// Sound input that records at 192 kHz.
+    pub device: String,
+    /// 0 = left, 1 = right.
+    pub channel: usize,
+    pub gain_db: f32,
+    /// Switch to the backup when no stream came for this long.
+    pub timeout_ms: u32,
+    /// Switch back after the stream came without a break for this long.
+    pub return_s: f32,
+    /// Also switch when the stream carries silence (its MPX below about -40 dB).
+    pub on_silence: bool,
+}
+
+impl Default for BackupCfg {
+    fn default() -> Self {
+        BackupCfg { on: false, device: String::new(), channel: 0, gain_db: 0.0, timeout_ms: 1000, return_s: 5.0, on_silence: false }
+    }
+}
+
+/// Live state of the backup source.
+#[derive(Clone, Default, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BackupView {
+    pub enabled: bool,
+    /// The backup is on air.
+    pub active: bool,
+    /// Switches to the backup since start.
+    pub switches: u64,
+    /// State of the sound input.
+    pub input: String,
+    /// Level of the backup input, 0..1.
+    pub level: f32,
+    /// Seconds until the stream is back on air (while it returns), else 0.
+    pub return_in_s: f32,
+}
+
+/// Shared by the receiving thread and the backup thread.
+struct Backup {
+    t0: Instant,
+    /// Time of the last (good) stream samples, ms since t0 (0 = none yet).
+    last_ip: AtomicU64,
+    active: AtomicBool,
+    view: Mutex<BackupView>,
+    on_silence: bool,
+}
+
+impl Backup {
+    fn ms(&self) -> u64 {
+        self.t0.elapsed().as_millis() as u64 + 1
+    }
+}
+
+/// What goes on air: the samples of the stream, or of the backup while it is active; analysed (scope, RDS,
+/// peak) in both cases.
+struct OnAir {
+    sink: Sink,
+    an: crate::mpxscope::Analyzer,
+    rds: RdsDecoder,
 }
 
 /// Where the received samples go: the normal buffer, or the SFN playout.
+#[derive(Clone)]
 enum Sink {
     Plain(Arc<Queue>),
     Sfn(Arc<SfnPlayout>),
@@ -120,6 +189,8 @@ pub struct RxView {
     pub clock: Option<ClockState>,
     /// Protection: encryption, FEC, rejected and blocked packets.
     pub protect: ProtStats,
+    /// Backup source (sound card input) and whether it is on air.
+    pub backup: BackupView,
 }
 
 pub struct RxHandle {
@@ -236,6 +307,9 @@ fn status_line(v: &RxView) -> String {
     if v.stats.lost > 0 || v.stats.bad > 0 {
         t += &format!("; lost packets {} (restored {}, concealed {:.0} ms)", v.stats.lost + v.stats.bad, v.stats.recovered, v.stats.concealed as f64 / 192.0);
     }
+    if v.backup.active {
+        t = format!("ON BACKUP (sound card input); the stream is back on air in {:.0} s. {t}", v.backup.return_in_s);
+    }
     let p = &v.protect;
     if p.encrypted {
         t += "; encrypted";
@@ -261,6 +335,73 @@ fn waiting_line(p: &ProtStats, waiting: String) -> String {
     }
 }
 
+/// Captures the backup MPX all the time (so it is ready at once) and puts it on air while the stream is missing.
+fn backup_thread(c: BackupCfg, b: Arc<Backup>, air: Arc<Mutex<OnAir>>, stop: Arc<AtomicBool>, pk: Arc<AtomicU32>, scope: crate::mpxscope::Scope) {
+    std::thread::spawn(move || {
+        let (src, rx) = crate::srcin::start_mpx(&c.device, c.channel, c.gain_db);
+        let mut good_since: Option<u64> = None;
+        let mut fade = 0usize; // fade-in after switching, samples
+        const FADE: usize = 1920; // 10 ms
+        let mut level = 0f32;
+        while !stop.load(Ordering::Relaxed) {
+            let blk = rx.recv_timeout(Duration::from_millis(100)).ok();
+            let now = b.ms();
+            let last = b.last_ip.load(Ordering::Relaxed);
+            let age = if last == 0 { now } else { now - last.min(now) };
+            let active = b.active.load(Ordering::Relaxed);
+            // the stream is missing: backup on air
+            if !active && age > c.timeout_ms as u64 {
+                b.active.store(true, Ordering::Relaxed);
+                fade = 0;
+                good_since = None;
+                if let Ok(mut v) = b.view.lock() {
+                    v.switches += 1;
+                }
+            }
+            let mut return_in = 0f32;
+            if b.active.load(Ordering::Relaxed) {
+                // the stream must come back without a break for return_s before it goes on air again
+                if age < 300 {
+                    let since = *good_since.get_or_insert(now);
+                    let waited = (now - since) as f32 / 1000.0;
+                    return_in = (c.return_s - waited).max(0.0);
+                    if waited >= c.return_s {
+                        b.active.store(false, Ordering::Relaxed);
+                        good_since = None;
+                    }
+                } else {
+                    good_since = None;
+                    return_in = c.return_s;
+                }
+            }
+            if let Some(mut blk) = blk {
+                level = blk.iter().fold(level * 0.9, |m, v| m.max(v.abs()));
+                if b.active.load(Ordering::Relaxed) {
+                    for v in blk.iter_mut() {
+                        if fade < FADE {
+                            *v *= fade as f32 / FADE as f32;
+                            fade += 1;
+                        }
+                    }
+                    track_peak(&blk, &pk);
+                    if let Ok(mut a) = air.lock() {
+                        a.an.push(&blk, &scope);
+                        a.rds.push(&blk);
+                        a.sink.push(&blk, None);
+                    }
+                }
+            }
+            if let Ok(mut v) = b.view.lock() {
+                v.active = b.active.load(Ordering::Relaxed);
+                v.input = src.status();
+                v.level = level;
+                v.return_in_s = return_in;
+            }
+        }
+        src.stop();
+    });
+}
+
 impl RxHandle {
     pub fn start(cfg: &RxCfg) -> RxHandle {
         let stop = Arc::new(AtomicBool::new(false));
@@ -282,16 +423,51 @@ impl RxHandle {
         };
         let scope = crate::mpxscope::new_scope();
         let scope2 = scope.clone();
+        let air = Arc::new(Mutex::new(OnAir { sink: q, an: crate::mpxscope::Analyzer::new(), rds: RdsDecoder::new(192_000) }));
+        let backup = cfg.backup.on.then(|| {
+            let b = Arc::new(Backup { t0: Instant::now(), last_ip: AtomicU64::new(0), active: AtomicBool::new(false), view: Mutex::new(BackupView { enabled: true, ..Default::default() }), on_silence: cfg.backup.on_silence });
+            backup_thread(cfg.backup.clone(), b.clone(), air.clone(), stop.clone(), peak.clone(), scope.clone());
+            b
+        });
         let (st, stt, pk, vw, port, tcp) = (stop.clone(), status.clone(), peak.clone(), view.clone(), cfg.port, cfg.proto == "tcp");
+        // the stream's samples: on air unless the backup is
+        let bk = backup.clone();
+        let feed = move |samples: &[f32], stamp: Option<(usize, i64)>, air: &Mutex<OnAir>| {
+            if let Some(b) = &bk {
+                let good = !b.on_silence || samples.iter().fold(0f32, |m, v| m.max(v.abs())) > 0.01;
+                if good {
+                    b.last_ip.store(b.ms(), Ordering::Relaxed);
+                }
+                if b.active.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+            track_peak(samples, &pk);
+            if let Ok(mut a) = air.lock() {
+                a.an.push(samples, &scope2);
+                a.rds.push(samples);
+                a.sink.push(samples, stamp);
+            }
+        };
+        let bk = backup.clone();
         let (password, allow) = (cfg.password.clone(), AllowList::parse(&cfg.allow));
         std::thread::spawn(move || {
             // the key is made from the password once (it takes some milliseconds)
             let mut unprot = Unprotector::new(&password);
             let key = (!password.is_empty()).then(|| crate::crypt::stream_key(&password));
             let mut samples: Vec<f32> = Vec::with_capacity(8192);
-            let mut an = crate::mpxscope::Analyzer::new();
             let mut meter = Meter::new();
-            let mut rds = RdsDecoder::new(192_000);
+            // the numbers for the window (also the backup's state)
+            let tick = |meter: &mut Meter, from: &str, stats: &RxStats| -> bool {
+                let Ok(a) = air.lock() else { return false };
+                let done = meter.tick(&vw, from, stats, &a.sink, &card, &a.rds);
+                if done {
+                    if let (Some(b), Ok(mut v)) = (&bk, vw.lock()) {
+                        v.backup = b.view.lock().map(|g| g.clone()).unwrap_or_default();
+                    }
+                }
+                done
+            };
             if tcp {
                 let l = match TcpListener::bind(("0.0.0.0", port)) {
                     Ok(l) => l,
@@ -319,7 +495,7 @@ impl RxHandle {
                             }
                             Ok(x) => break x,
                             Err(_) => {
-                                meter.tick(&vw, "-", &RxStats::default(), &q, &card, &rds);
+                                tick(&mut meter, "-", &RxStats::default());
                                 std::thread::sleep(Duration::from_millis(100));
                             }
                         }
@@ -366,16 +542,13 @@ impl RxHandle {
                                 samples.clear();
                                 de.feed(&plain, &mut samples);
                                 if !samples.is_empty() {
-                                    track_peak(&samples, &pk);
-                                    an.push(&samples, &scope2);
-                                    rds.push(&samples);
-                                    q.push(&samples, None); // TCP carries no SFN time stamps
+                                    feed(&samples, None, &air); // TCP carries no SFN time stamps
                                 }
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
                             Err(_) => break,
                         }
-                        if meter.tick(&vw, &who, &de.stats(), &q, &card, &rds) {
+                        if tick(&mut meter, &who, &de.stats()) {
                             if let Ok(mut v) = vw.lock() {
                                 v.protect = unprot.stats.clone();
                                 set(&stt, &status_line(&v));
@@ -423,10 +596,7 @@ impl RxHandle {
                             if ok {
                                 any = true;
                                 if !samples.is_empty() {
-                                    track_peak(&samples, &pk);
-                                    an.push(&samples, &scope2);
-                                    rds.push(&samples);
-                                    q.push(&samples, if compact { cx.stamp } else { de.stamp });
+                                    feed(&samples, if compact { cx.stamp } else { de.stamp }, &air);
                                 }
                             }
                         }
@@ -442,7 +612,7 @@ impl RxHandle {
                             meter.add(n as u64 + 28);
                         }
                     }
-                    if meter.tick(&vw, &from, if compact { &cx.stats } else { &de.stats }, &q, &card, &rds) {
+                    if tick(&mut meter, &from, if compact { &cx.stats } else { &de.stats }) {
                         if let Ok(mut v) = vw.lock() {
                             v.protect = unprot.stats.clone();
                             if v.receiving {
@@ -459,7 +629,11 @@ impl RxHandle {
     }
 
     pub fn status_text(&self) -> String {
-        get(&self.status)
+        let s = get(&self.status);
+        match self.view.lock().map(|v| v.backup.clone()) {
+            Ok(b) if b.active && !s.starts_with("ON BACKUP") => format!("ON BACKUP (sound card input). {s}"),
+            _ => s,
+        }
     }
 
     /// Live numbers: bandwidth, format, sender, losses, buffer and history.
