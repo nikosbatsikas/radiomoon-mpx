@@ -4,7 +4,6 @@
 - [[Transmitter]]
 - [[Receiver]]
 - [[IP Transport and Formats]]
-- [[QoS on Windows]]
 - [[Protection]]
 - [[SFN]]
 - [[RDS]]
@@ -19,4 +18,8 @@
 - [[AlmaLinux]]
 - [[Raspberry Pi]]
 
+**Tips**
+- [[Tips]]
+- [[Station Logos in Cars]]
+- [[QoS on Windows]]
 - [[Troubleshooting]]
