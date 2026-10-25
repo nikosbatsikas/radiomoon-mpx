@@ -25,40 +25,43 @@ jobs:
         run: cargo build --release --bin radiomoon-mpx-transmitter --bin radiomoon-mpx-receiver --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
       - name: Screenshots of the windows
         shell: bash
+        timeout-minutes: 15
         run: |
-          set -x
-          mkdir -p shots data
+          mkdir -p shots data logs
           export RADIOMOON_DATA=$PWD/data
           cp packaging/wiki/demo-transmitter.json data/mpx-transmitter.json
           cp packaging/wiki/demo-receiver.json data/mpx-receiver.json
           Xvfb :99 -screen 0 1400x1000x24 & sleep 2
           export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1
+          glxinfo -B 2>&1 | head -8 || true
           T=target/release/radiomoon-mpx-transmitter; R=target/release/radiomoon-mpx-receiver
           grab() { # $1 = window title, $2 = file
-            W=$(xdotool search --sync --onlyvisible --name "^$1\$" | head -n1)
-            import -window "$W" "shots/$2.png" || true
+            W=$(timeout 20 xdotool search --sync --onlyvisible --name "^$1\$" | head -n1)
+            if [ -n "$W" ]; then import -window "$W" "shots/$2.png"; else echo "no window $1 for $2"; import -window root "shots/$2-root.png"; fi
           }
           # the receiver, then the transmitter keep running while the other one goes through its tabs
-          RM_TAB=rds $R & RPID=$!
-          sleep 2
+          RM_TAB=rds $R > logs/rx-first.log 2>&1 & RPID=$!
+          sleep 3
           for TAB in source ip card signal rds sfn service; do
-            RM_TAB=$TAB $T & TPID=$!
+            RM_TAB=$TAB $T > logs/tx-$TAB.log 2>&1 & TPID=$!
             sleep 12
             grab "RadioMoon MPX Transmitter" "transmitter-$TAB"
-            kill $TPID; sleep 1
+            kill $TPID 2>/dev/null; sleep 1
           done
-          RM_TAB=ip $T & TPID=$!
-          kill $RPID; sleep 1
+          RM_TAB=ip $T > logs/tx-run.log 2>&1 & TPID=$!
+          kill $RPID 2>/dev/null; sleep 1
           for TAB in rds input output sfn log service; do
-            RM_TAB=$TAB $R & RPID=$!
+            RM_TAB=$TAB $R > logs/rx-$TAB.log 2>&1 & RPID=$!
             if [ "$TAB" = sfn ] || [ "$TAB" = log ]; then sleep 40; else sleep 15; fi
             grab "RadioMoon MPX Receiver" "receiver-$TAB"
-            kill $RPID; sleep 1
+            kill $RPID 2>/dev/null; sleep 1
           done
-          kill $TPID || true
+          kill $TPID 2>/dev/null || true
           ls -l shots
+          echo "::notice title=window shots::$(ls shots | tr '\n' ' ') | tx: $(tail -c 400 logs/tx-source.log | tr '\n' ' ') | rx: $(tail -c 400 logs/rx-first.log | tr '\n' ' ')"
       - name: Screenshots of the web pages
         shell: bash
+        timeout-minutes: 10
         run: |
           export RADIOMOON_DATA=$PWD/data
           echo "wiki-demo-pass" | target/release/radiomoon-mpx-txd --data data --set-login admin
