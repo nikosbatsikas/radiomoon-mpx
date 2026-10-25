@@ -37,7 +37,8 @@ impl web::App for Rx {
     }
     fn devices_json(&self) -> String {
         let host = rodio::cpal::default_host();
-        let outputs: Vec<String> = host.output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
+        let mut outputs: Vec<String> = host.output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
+        outputs.push(radiomoon_mpx::mpxio::NO_CARD.to_string());
         serde_json::json!({ "outputs": outputs, "inputs": radiomoon_mpx::srcin::list_inputs(), "serial": radiomoon_mpx::clock::serial_ports() }).to_string()
     }
 }

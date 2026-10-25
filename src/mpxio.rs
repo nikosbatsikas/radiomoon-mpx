@@ -163,7 +163,45 @@ fn open_card(name: &str, q: Arc<Queue>) -> Result<Stream, String> {
     Ok(stream)
 }
 
+/// The output "no sound card": takes the samples at the pace of 192 kHz by the computer's clock and plays nothing.
+/// For tests (the receiving, the analysis, the log and SFN work as with a card) and for sites without a card yet.
+pub const NO_CARD: &str = "No sound card (test output)";
+
+/// Calls `f` with blocks of 10 ms (1920 samples) at real-time pace until `stop`.
+fn paced(stop: &AtomicBool, mut f: impl FnMut(&mut Vec<f32>)) {
+    let t0 = std::time::Instant::now();
+    let mut n: u64 = 0;
+    let mut buf = vec![0f32; 1920];
+    while !stop.load(Ordering::Relaxed) {
+        n += 1;
+        let due = Duration::from_micros(n * 10_000);
+        if let Some(w) = due.checked_sub(t0.elapsed()) {
+            std::thread::sleep(w);
+        } else if t0.elapsed() > due + Duration::from_millis(500) {
+            n = (t0.elapsed().as_micros() / 10_000) as u64; // the computer was busy: do not catch up
+        }
+        f(&mut buf);
+    }
+}
+
 pub fn card_thread(name: String, q: Arc<Queue>, stop: Arc<AtomicBool>, status: Text, label: &'static str) {
+    if name == NO_CARD {
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            let mut out = Vec::with_capacity(1920);
+            paced(&stop, |_| {
+                out.clear();
+                if !q.pop_n(1920, &mut out) {
+                    q.under.fetch_add(1, Ordering::Relaxed);
+                }
+                if last.elapsed() > Duration::from_millis(400) {
+                    last = std::time::Instant::now();
+                    set(&status, &format!("{label}: none (test output, nothing is played), buffer {} ms", q.ms()));
+                }
+            });
+        });
+        return;
+    }
     std::thread::spawn(move || {
         let stream = match open_card(&name, q.clone()) {
             Ok(s) => s,
@@ -217,6 +255,19 @@ fn build_sfn<T: SizedSample + FromSample<f32>>(dev: &rodio::cpal::Device, cfg: &
 
 /// Like `card_thread`, but every sample is played at its SFN time (see sfn.rs).
 pub fn sfn_card_thread(name: String, pl: Arc<crate::sfn::SfnPlayout>, stop: Arc<AtomicBool>, status: Text, label: &'static str) {
+    if name == NO_CARD {
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            paced(&stop, |buf| {
+                pl.render(buf, 0);
+                if last.elapsed() > Duration::from_millis(400) {
+                    last = std::time::Instant::now();
+                    set(&status, &format!("{label}: none (test output, nothing is played), SFN playout, buffer {} ms", pl.ms()));
+                }
+            });
+        });
+        return;
+    }
     std::thread::spawn(move || {
         let open = || -> Result<Stream, String> {
             let dev = find_device(&name).ok_or("No sound output found")?;
@@ -256,6 +307,10 @@ pub fn sfn_card_thread(name: String, pl: Arc<crate::sfn::SfnPlayout>, stop: Arc<
             Ok(s) => s,
             Err(e) => {
                 set(&status, &format!("{label}: {e}"));
+                // without a playing card the SFN playout cannot run: say so in the SFN state
+                if let Ok(mut s) = pl.status.lock() {
+                    s.state = format!("Not playing: {e}. Choose a sound card that plays 192 kHz (Output tab), or \"{NO_CARD}\" for a test.");
+                }
                 return;
             }
         };

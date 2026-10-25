@@ -2,6 +2,11 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.2
+- **SFN: clear state when nothing plays.** When the sound card cannot be opened (e.g. "does not support 192 kHz output"), the SFN state now says *Not playing* with the reason, instead of staying on "Waiting for time stamps" (the playout only runs while a card plays).
+- **New output "No sound card (test output)"** in the Receiver (window and web page): takes the samples at the pace of 192 kHz and plays nothing, so the link, the analysis, the log and the SFN lock can be tested on a computer without a 192 kHz card.
+- **SFN: clock warning.** When the arrival margin is longer than the delay, the Receiver warns that the Transmitter's clock runs ahead of its own, by how much, and to synchronise the clocks.
+
 ## 1.12.1
 - **Web interface: About.** An *About* button in the header opens the About box, as in the window programs: program logo, version, what the program does, the authors, links to the project, the wiki and the releases, and - after login - this system: computer name, operating system and processor, how long the program has been running and its data folder. The program logo is also in the header and in the browser tab.
 
