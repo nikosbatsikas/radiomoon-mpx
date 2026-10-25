@@ -108,6 +108,11 @@ pub struct SfnStatus {
     pub card_jitter_us: f64,
     /// Spread of the transmitter's time stamps around a straight line, µs.
     pub stamp_jitter_us: f64,
+    /// Steps of the reference clock (e.g. the system clock set by the time service), and the last one, ms.
+    pub clock_steps: u64,
+    pub last_clock_step_ms: f64,
+    /// Why the playout started anew the last time.
+    pub last_restart: String,
 }
 
 /// Windowed-sinc fractional interpolator (32 taps, 512 phases): keeps the 57 kHz RDS and 38 kHz stereo intact
@@ -180,6 +185,10 @@ struct Buf {
     rate_show: f64,
     /// Blocks in a row far off the target (a busy computer: callbacks late), and single outliers skipped.
     far: u32,
+    /// The reference clock against the monotonic clock: a jump of this offset is a step of the clock.
+    mono: Option<(std::time::Instant, i128, f64)>,
+    /// Blocks in a row with the shown error beyond the unlock limit (then the loop is made fast again).
+    off_blocks: u32,
 }
 
 pub struct SfnPlayout {
@@ -197,7 +206,7 @@ impl SfnPlayout {
         Arc::new(SfnPlayout {
             cfg,
             clock,
-            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0, dll: None, dll_age: 0, dll_jitter: 0.0, err_show: 0.0, rate_show: 0.0, far: 0 }),
+            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0, dll: None, dll_age: 0, dll_jitter: 0.0, err_show: 0.0, rate_show: 0.0, far: 0, mono: None, off_blocks: 0 }),
             interp: Interp::new(),
             status: Mutex::new(SfnStatus { active: true, state: "Waiting for time stamps".into(), ..SfnStatus::default() }),
             cap,
@@ -289,6 +298,25 @@ impl SfnPlayout {
             });
             return;
         };
+        // steps of the reference clock (a time service setting the system clock): the playout follows them, but they
+        // are counted and shown, as they move this site against the others
+        let mut step_ms = None;
+        match b.mono {
+            None => b.mono = Some((std::time::Instant::now(), now, 0.0)),
+            Some((i0, n0, last)) => {
+                let off = (now - n0) as f64 - i0.elapsed().as_nanos() as f64;
+                if (off - last).abs() > 1e6 {
+                    step_ms = Some((off - last) / 1e6);
+                }
+                b.mono = Some((i0, n0, off));
+            }
+        }
+        if let Some(ms) = step_ms {
+            self.set_state(|s| {
+                s.clock_steps += 1;
+                s.last_clock_step_ms = ms;
+            });
+        }
         let Some(&(ka, sa)) = b.anchors.back() else {
             out.fill(0.0);
             drop(b);
@@ -347,8 +375,10 @@ impl SfnPlayout {
                 });
                 return;
             }
+            let why = b.pos.map(|p| format!("the playout was {:+.1} ms off its time", (p - target) / FS * 1e3));
             b.pos = Some(target);
             b.far = 0;
+            b.off_blocks = 0;
             b.integ = 0.0;
             b.err_f = 0.0;
             b.ratio_adj = 0.0;
@@ -356,7 +386,12 @@ impl SfnPlayout {
             b.err_show = 0.0;
             b.rate_show = 0.0;
             drop(b);
-            self.set_state(|s| s.resyncs += 1);
+            self.set_state(|s| {
+                s.resyncs += 1;
+                if let Some(w) = why {
+                    s.last_restart = w;
+                }
+            });
             b = match self.b.lock() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -418,6 +453,17 @@ impl SfnPlayout {
         // how exactly the shown error can be measured with this callback jitter (its averaging time)
         let noise_us = jit * (bt / if age_s < 15.0 { 1.0 } else { 10.0 }).sqrt();
         let (lock_at, unlock_at) = ((3.0 * noise_us).max(50.0), (6.0 * noise_us).max(200.0));
+        // far off for 2 s although the loop is slow (a step of the clock or of the card's latency): make the loop fast
+        // again, so it is back in a few seconds instead of minutes (no restart: the sound goes on)
+        if age_s > 15.0 && e_us.abs() > unlock_at {
+            b.off_blocks += 1;
+            if b.off_blocks as f64 * bt > 2.0 {
+                b.settle = (3.0 / bt) as u32; // back to 0.1 Hz, the error shown over 1 s
+                b.off_blocks = 0;
+            }
+        } else {
+            b.off_blocks = 0;
+        }
         drop(b);
         self.set_state(|s| {
             s.error_us = e_us;
@@ -566,6 +612,47 @@ mod tests {
         assert_eq!(st.resyncs, 1, "restarted on a late callback");
         assert_eq!(unlocks, 0);
         assert!(st.locked && st.error_us.abs() < 10.0);
+    }
+
+    /// A step of 3 ms (the system clock set by a time service, or the card's latency changing): the playout follows
+    /// it without a restart and is locked again within 15 s.
+    #[test]
+    fn playout_follows_a_step() {
+        let clock = RefClock::start(&ClockCfg::default());
+        let pl = SfnPlayout::new(SfnCfg { delay_ms: 300.0, correction_us: 0.0 }, clock.clone());
+        let block = 1024usize;
+        let mut out = vec![0f32; block];
+        let (mut fed, mut card_t) = (0u64, 0.0f64);
+        let start = clock.now_ns().unwrap() as i64;
+        let real0 = start as f64 / 1e9;
+        let mut x: u64 = 777;
+        let mut relock: Option<f64> = None;
+        let steps = (150.0 * FS / block as f64) as usize;
+        for step in 0..steps {
+            let t_sim = step as f64 * block as f64 / FS;
+            while (fed as f64 / FS) < t_sim - 0.05 + 0.01 {
+                let pk: Vec<f32> = (0..384).map(|j| ((fed + j) as f32 * 0.001).sin()).collect();
+                pl.push(&pk, Some((0, start + (fed as f64 * 1e9 / FS) as i64)));
+                fed += 384;
+            }
+            card_t += block as f64 / FS / (1.0 + 20e-6);
+            let real_now = clock.now_ns().unwrap() as f64 / 1e9 - real0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let jitter = ((x % 2001) as f64 - 1000.0) * 1e-6;
+            let shift = if t_sim > 80.0 { 0.003 } else { 0.0 };
+            pl.render(&mut out, ((card_t - real_now + jitter + shift) * 1e9) as i128);
+            let st = pl.status.lock().unwrap().clone();
+            if t_sim > 82.0 && relock.is_none() && st.locked && st.error_us.abs() < 60.0 {
+                relock = Some(t_sim - 80.0);
+            }
+        }
+        let st = pl.status.lock().unwrap().clone();
+        eprintln!("3 ms step: locked again after {relock:?} s, {st:?}");
+        assert_eq!(st.resyncs, 1, "no restart");
+        assert!(relock.map(|t| t < 15.0).unwrap_or(false), "{relock:?}");
+        assert!(st.locked && st.error_us.abs() < 60.0);
     }
 
     #[test]

@@ -38,6 +38,8 @@ function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
   if(p.plain_rejected)pl.push([C.warn,p.plain_rejected+" unencrypted packets ignored"]);if(p.blocked)pl.push([C.warn,p.blocked+" blocked, last from "+p.blocked_from]);
   const b=v.backup||{};if(b.enabled)pl.push([b.active?C.warn:C.good,b.active?"BACKUP ON AIR"+(v.receiving?" - stream back on air in "+b.return_in_s.toFixed(0)+" s":""):"Stream on air, backup ready ("+(b.level*100).toFixed(0)+"% input level, switched "+b.switches+" times)"]);
   if(v.sfn){const s=v.sfn;pl.push([s.locked?C.good:C.warn,"SFN: "+s.state+" · error "+s.error_us.toFixed(1)+" µs · "+s.ppm.toFixed(2)+" ppm · margin "+s.margin_ms.toFixed(0)+" ms · card jitter "+(s.card_jitter_us>=1000?(s.card_jitter_us/1000).toFixed(1)+" ms":s.card_jitter_us.toFixed(0)+" µs")]);
+   if(s.clock_steps)pl.push([C.warn,"The clock was stepped "+s.clock_steps+" times (last "+s.last_clock_step_ms.toFixed(1)+" ms): use a time service that adjusts smoothly (chrony, ptp4l, Meinberg NTP) or GPS / PTP."]);
+   if(s.resyncs>1&&s.last_restart)pl.push([C.dim,"Restarts "+(s.resyncs-1)+", last: "+s.last_restart]);
    if(S&&s.margin_ms<1e6&&s.margin_ms>S.sfn_delay_ms+20)pl.push([C.warn,"The arrival margin is longer than the delay: the Transmitter's clock is about "+(s.margin_ms-S.sfn_delay_ms).toFixed(0)+" ms ahead of this computer's. Synchronise the clocks."]);}
   if(v.clock)pl.push([v.clock.synced?C.good:C.warn,"Clock: "+v.clock.text]);
   if(pl.length)m.append(card("Protection, backup, SFN",...pl.map(([c,t])=>el("div",{},dot(c),t))));

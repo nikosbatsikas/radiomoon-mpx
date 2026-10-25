@@ -527,6 +527,15 @@ impl App {
                         Tile::new("Restarts", s.resyncs.to_string(), "", look::TEXT),
                     ],
                 );
+                if s.clock_steps > 0 {
+                    ui.horizontal_wrapped(|ui| {
+                        look::dot(ui, look::WARN);
+                        ui.label(RichText::new(format!("The clock was stepped {} times (last {:+.1} ms). A time service that sets the clock in steps (e.g. the Windows time service) moves this site against the others: use one that adjusts smoothly (chrony, ptp4l, Meinberg NTP), or GPS / PTP as the reference.", s.clock_steps, s.last_clock_step_ms)).small().color(look::WARN));
+                    });
+                }
+                if s.resyncs > 1 && !s.last_restart.is_empty() {
+                    ui.label(RichText::new(format!("Last restart: {}", s.last_restart)).small().color(look::DIM));
+                }
                 // a margin longer than the delay is only possible when the Transmitter's clock runs ahead of this one
                 if s.margin_ms.is_finite() && s.margin_ms < 1e6 && s.margin_ms > self.s.sfn_delay_ms + 20.0 {
                     ui.horizontal_wrapped(|ui| {
