@@ -27,6 +27,7 @@ jobs:
         shell: bash
         timeout-minutes: 15
         run: |
+          set +e
           mkdir -p shots data logs
           export RADIOMOON_DATA=$PWD/data
           cp packaging/wiki/demo-transmitter.json data/mpx-transmitter.json
