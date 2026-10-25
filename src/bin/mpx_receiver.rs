@@ -523,6 +523,7 @@ impl App {
                         Tile::new("Rate trim", format!("{:+.2}", s.ppm), "ppm", look::TEXT),
                         Tile::new("Arrival margin", if s.margin_ms.is_finite() && s.margin_ms < 1e6 { format!("{:.0}", s.margin_ms) } else { "-".into() }, "ms", if s.margin_ms < 20.0 { look::WARN } else { look::TEXT }),
                         Tile::new("Stamp jitter", format!("±{:.1}", s.stamp_jitter_us), "µs", look::TEXT),
+                        Tile::new("Card jitter", if s.card_jitter_us >= 1000.0 { format!("{:.1}", s.card_jitter_us / 1000.0) } else { format!("{:.0}", s.card_jitter_us) }, if s.card_jitter_us >= 1000.0 { "ms" } else { "µs" }, if s.card_jitter_us > 3000.0 { look::WARN } else { look::TEXT }),
                         Tile::new("Restarts", s.resyncs.to_string(), "", look::TEXT),
                     ],
                 );

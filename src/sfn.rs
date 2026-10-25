@@ -104,6 +104,8 @@ pub struct SfnStatus {
     pub margin_ms: f64,
     /// Number of times the playout position was set anew (start, gaps, too late).
     pub resyncs: u64,
+    /// How unevenly the sound card's callbacks come (RMS, µs); the playout averages it out.
+    pub card_jitter_us: f64,
     /// Spread of the transmitter's time stamps around a straight line, µs.
     pub stamp_jitter_us: f64,
 }
@@ -168,6 +170,13 @@ struct Buf {
     margin_since: std::time::Instant,
     /// Blocks since the last (re)start.
     settle: u32,
+    /// Card time: a delay-locked loop on the sound card's callbacks. The time of a callback (system clock + the
+    /// driver's latency) jitters by milliseconds; the loop gives the smooth time at which the card really plays each
+    /// block (and follows the card's clock rate). (start ns, smoothed time of the next block ns, ns per sample)
+    dll: Option<(i128, f64, f64)>,
+    /// Blocks since the loop started (its bandwidth narrows step by step) and the callback jitter (RMS, ns).
+    dll_age: u32,
+    dll_jitter: f64,
 }
 
 pub struct SfnPlayout {
@@ -185,7 +194,7 @@ impl SfnPlayout {
         Arc::new(SfnPlayout {
             cfg,
             clock,
-            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0 }),
+            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0, dll: None, dll_age: 0, dll_jitter: 0.0 }),
             interp: Interp::new(),
             status: Mutex::new(SfnStatus { active: true, state: "Waiting for time stamps".into(), ..SfnStatus::default() }),
             cap,
@@ -286,8 +295,31 @@ impl SfnPlayout {
             });
             return;
         };
+        // when this block is really heard: the callback time smoothed by the delay-locked loop (bandwidth 0.2 Hz)
+        let meas = now + latency_ns;
+        let age_s = b.dll_age as f64 * n as f64 / FS;
+        let heard = match b.dll {
+            Some((t0, pred, ps)) if ((meas - t0) as f64 - pred).abs() < 20e6 => {
+                let e = (meas - t0) as f64 - pred;
+                b.dll_age = b.dll_age.saturating_add(1);
+                b.dll_jitter += (e * e - b.dll_jitter) * 0.01;
+                // wide at the start (finds the card's rate fast), then narrow (averages the callback jitter)
+                let bw = if age_s < 2.0 { 1.0 } else if age_s < 15.0 { 0.1 } else { 0.02 };
+                let w = 2.0 * std::f64::consts::PI * bw * (n as f64 / FS);
+                let cur = pred + std::f64::consts::SQRT_2 * w * e;
+                let ps = (ps + w * w * e / n as f64).clamp(1e9 / FS * 0.999, 1e9 / FS * 1.001);
+                b.dll = Some((t0, cur + n as f64 * ps, ps));
+                t0 + cur as i128
+            }
+            _ => {
+                // start, or the card stopped / skipped: start the loop anew
+                b.dll = Some((meas, n as f64 * 1e9 / FS, 1e9 / FS));
+                b.dll_age = 0;
+                meas
+            }
+        };
         // the sample that must be heard at the time this block starts playing
-        let t_play = now + latency_ns - (self.cfg.correction_us * 1000.0) as i128;
+        let t_play = heard - (self.cfg.correction_us * 1000.0) as i128;
         let target = ka as f64 + (t_play - sa as i128 - (self.cfg.delay_ms * 1e6) as i128) as f64 * FS / 1e9;
         let lo = b.base as f64 + 16.0;
         let hi = (b.base + b.data.len() as u64) as f64 - 17.0 - n as f64 * 1.001;
@@ -365,12 +397,14 @@ impl SfnPlayout {
         while b.anchors.len() > 2 && b.anchors[0].0 < b.base {
             b.anchors.pop_front();
         }
-        let (e_us, ppm, settled) = (ef / FS * 1e6, b.ratio_adj * 1e6, b.settle > 300);
+        let (e_us, ppm, settled, jit) = (ef / FS * 1e6, b.ratio_adj * 1e6, b.settle > 300, b.dll_jitter.sqrt() / 1000.0);
         drop(b);
         self.set_state(|s| {
             s.error_us = e_us;
             s.ppm = ppm;
-            s.locked = settled && e_us.abs() < 50.0;
+            s.card_jitter_us = jit;
+            // locked within 50 µs, unlocked again only beyond 200 µs (no flicker around the limit)
+            s.locked = settled && if s.locked { e_us.abs() < 200.0 } else { e_us.abs() < 50.0 };
             s.state = if missing {
                 "Data missing (network gap)".into()
             } else if s.locked {
@@ -417,6 +451,51 @@ mod tests {
 
     /// Two receivers with different sound card clocks (+40 ppm and -25 ppm) and different network delays play the
     /// same stream: both must lock to the stamps, i.e. play the same sample at the same time.
+    /// A real sound card calls back with a jitter of up to a millisecond or more (PipeWire, PulseAudio, USB): the
+    /// playout must stay locked all the time and not restart.
+    #[test]
+    fn playout_stays_locked_with_callback_jitter() {
+        let clock = RefClock::start(&ClockCfg::default());
+        let pl = SfnPlayout::new(SfnCfg { delay_ms: 300.0, correction_us: 0.0 }, clock.clone());
+        let (block, ppm) = (1024usize, 30.0f64);
+        let mut out = vec![0f32; block];
+        let (mut fed, mut card_t) = (0u64, 0.0f64);
+        let start = clock.now_ns().unwrap() as i64;
+        let real0 = start as f64 / 1e9;
+        let mut x: u64 = 12345;
+        let (mut unlocks, mut was_locked, mut max_err) = (0, false, 0f64);
+        for step in 0..12_000 {
+            let t_sim = step as f64 * block as f64 / FS;
+            while (fed as f64 / FS) < t_sim - 0.05 + 0.01 {
+                let pk: Vec<f32> = (0..384).map(|j| ((fed + j) as f32 * 0.001).sin()).collect();
+                pl.push(&pk, Some((0, start + (fed as f64 * 1e9 / FS) as i64)));
+                fed += 384;
+            }
+            card_t += block as f64 / FS / (1.0 + ppm * 1e-6);
+            let real_now = clock.now_ns().unwrap() as f64 / 1e9 - real0;
+            // the time of the callback as seen by the program: ± 4 ms of jitter
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let jitter = ((x % 2001) as f64 - 1000.0) * 1e-6;
+            let latency = ((card_t - real_now + jitter) * 1e9) as i128;
+            pl.render(&mut out, latency);
+            let st = pl.status.lock().unwrap().clone();
+            if step > 4000 {
+                if was_locked && !st.locked {
+                    unlocks += 1;
+                }
+                max_err = max_err.max(st.error_us.abs());
+            }
+            was_locked = st.locked;
+        }
+        let st = pl.status.lock().unwrap().clone();
+        eprintln!("jitter test: {st:?}, unlocks {unlocks}, max error {max_err:.1} µs");
+        assert!(st.locked && unlocks == 0, "{st:?} unlocks {unlocks}");
+        assert_eq!(st.resyncs, 1, "no restarts");
+        assert!(max_err < 50.0, "{max_err}");
+    }
+
     #[test]
     fn playout_locks_despite_card_clock_error() {
         let clock = RefClock::start(&ClockCfg::default());
