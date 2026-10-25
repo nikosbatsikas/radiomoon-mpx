@@ -20,7 +20,7 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils
+          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils libxkbcommon-x11-0
       - name: Build
         run: cargo build --release --bin radiomoon-mpx-transmitter --bin radiomoon-mpx-receiver --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
       - name: Screenshots of the windows
@@ -78,6 +78,7 @@ jobs:
         run: |
           git clone -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" w
           mkdir -p w/images/screens
+          rm -f w/images/screens/*-root.png shots/*-root.png
           cp shots/*.png w/images/screens/
           cd w
           git config user.name "github-actions[bot]"
