@@ -47,11 +47,13 @@ pub struct RdsData {
     pub ct_offset: i8,
     /// Daylight saving time added to `ct_offset` automatically: 0 = none, 1 = EU rule, 2 = US / Canada rule.
     pub ct_dst: u8,
+    /// Extended Country Code, sent in group 1A (0 = not sent).
+    pub ecc: u8,
 }
 
 impl Default for RdsData {
     fn default() -> Self {
-        RdsData { enabled: true, pi: 0x1234, ps: "RADIOMON".into(), rt: "RadioMoon".into(), pty: 10, tp: false, ta: false, music: true, af: Vec::new(), ct: false, ct_offset: 0, ct_dst: 0 }
+        RdsData { enabled: true, pi: 0x1234, ps: "RADIOMON".into(), rt: "RadioMoon".into(), pty: 10, tp: false, ta: false, music: true, af: Vec::new(), ct: false, ct_offset: 0, ct_dst: 0, ecc: 0 }
     }
 }
 
@@ -124,6 +126,12 @@ pub fn ct_offset_now(d: &RdsData, secs: i64) -> i8 {
     } else {
         off
     }
+}
+
+/// The ECC of a hex text ("E1", "e1", "0xE1"); None when empty or not valid (valid: A0 - F4).
+pub fn parse_ecc(t: &str) -> Option<u8> {
+    let t = t.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u8::from_str_radix(t, 16).ok().filter(|v| (0xA0..=0xF4).contains(v))
 }
 
 /// Parses "94.3, 101.5 105.0" into AF codes (at most 25, no doubles).
@@ -278,12 +286,13 @@ pub struct RdsEncoder {
     /// changing name never mixes two pages on a radio.
     ps_now: String,
     af_pair: usize,
+    ecc_count: u32,
     last_ct_minute: i64,
 }
 
 impl RdsEncoder {
     pub fn new(data: RdsData) -> Self {
-        RdsEncoder { ps_now: data.ps.clone(), data, bits: Vec::new(), pos: 0, seq: 0, ps_seg: 0, rt_seg: 0, rt_ab: false, last_rt: String::new(), cur_diff: 0, af_pair: 0, last_ct_minute: -1 }
+        RdsEncoder { ps_now: data.ps.clone(), data, bits: Vec::new(), pos: 0, seq: 0, ps_seg: 0, rt_seg: 0, rt_ab: false, last_rt: String::new(), cur_diff: 0, af_pair: 0, last_ct_minute: -1, ecc_count: 0 }
     }
 
     /// Block C of group 0A: the AF list (method A), one pair per group; the first pair gives the count.
@@ -329,6 +338,14 @@ impl RdsEncoder {
     fn group(&mut self) -> [u16; 4] {
         if let Some(g) = self.ct_group() {
             return g;
+        }
+        // group 1A with the Extended Country Code about every 3.5 s (40 groups)
+        self.ecc_count = (self.ecc_count + 1) % 40;
+        if self.data.ecc != 0 && self.ecc_count == 0 {
+            let d = &self.data;
+            let b2 = (1 << 12) | ((d.tp as u16) << 10) | ((d.pty as u16 & 31) << 5); // version A, no radio paging
+            // block C: linkage actuator 0, variant 0 (paging 0 + ECC); block D: programme item number 0
+            return [d.pi, b2, d.ecc as u16, 0];
         }
         if self.ps_seg == 0 {
             self.ps_now = self.data.ps.clone();

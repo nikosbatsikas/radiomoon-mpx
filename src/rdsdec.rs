@@ -49,6 +49,8 @@ pub struct RdsInfo {
     pub ct: String,
     /// Local time offset of the clock time, half hours.
     pub ct_offset: Option<i8>,
+    /// Extended Country Code (group 1A variant 0).
+    pub ecc: Option<u8>,
 }
 
 /// Decimating low-pass (windowed sinc, Blackman), computes only every `m`-th output.
@@ -339,6 +341,14 @@ impl RdsDecoder {
         self.info.tp = (b >> 10) & 1 == 1;
         self.info.pty = Some(((b >> 5) & 31) as u8);
         match gtype {
+            1 if !version_b => {
+                if let Some(c) = c {
+                    // block C: linkage actuator, variant (3 bits), then for variant 0: paging (4 bits) + ECC (8 bits)
+                    if (c >> 12) & 7 == 0 && c & 0xFF != 0 {
+                        self.info.ecc = Some((c & 0xFF) as u8);
+                    }
+                }
+            }
             0 => {
                 self.info.ta = (b >> 4) & 1 == 1;
                 self.info.music = (b >> 3) & 1 == 1;
@@ -517,7 +527,7 @@ mod tests {
     fn decodes_af_ct_and_long_ps() {
         use crate::mpxdsp::{parse_af, PsPager};
         let params = MpxParams::default();
-        let rds = RdsData { af: parse_af("94.3, 101.5 105.0"), ct: true, ct_offset: 6, ..RdsData::default() };
+        let rds = RdsData { af: parse_af("94.3, 101.5 105.0"), ct: true, ct_offset: 6, ecc: 0xE1, ..RdsData::default() };
         let mut gen = MpxEncoder::new(44_100, 192_000, params, rds);
         let mut dec = RdsDecoder::new(192_000);
         let mut out = Vec::new();
@@ -537,6 +547,9 @@ mod tests {
         let i = &dec.info;
         eprintln!("{i:?} pages seen {seen:?}");
         assert_eq!(i.af, vec![94.3, 101.5, 105.0]);
+        assert_eq!(i.ecc, Some(0xE1));
+        assert_eq!(crate::mpxdsp::parse_ecc(" e1 "), Some(0xE1));
+        assert_eq!(crate::mpxdsp::parse_ecc("12"), None);
         assert!(i.ct.contains("(UTC+3)"), "{}", i.ct);
         for p in &pages {
             assert!(seen.contains(p), "page {p:?} never shown complete");

@@ -30,7 +30,7 @@ Xperi keeps its own station database; broadcasters give their station data and l
 ### Correct codes are needed
 Both find the station by its **PI code**, RadioDNS also by the **ECC**:
 - **PI:** your real, unique code (in Greece from the regulator, EETT) — not the default `1234`. Transmitter → RDS tab → *PI code*.
-- **ECC:** the extended country code (RDS group 1A); Greece = **E1**. *(RadioMoon MPX does not send the ECC yet.)*
+- **ECC:** the extended country code (RDS group 1A); Greece = **E1**. Transmitter → RDS → *ECC* (from version 1.12.0); the Receiver shows it next to the PI, so you can check that it is on air.
 - Keep the **AF list** complete: the car then knows all frequencies of the station.
 
 ## 3. RDS2: a logo over the air
