@@ -22,7 +22,7 @@ function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
   const v=ST.view,st=v.stats,lost=st.lost+st.bad;
   m.append(card("Link",el("div",{class:"tiles"},tile("Bandwidth",mbps(v.mbps),"Mbit/s",C.accent),tile("Format",v.receiving?fmtName(st):"-",""),tile("Buffer",v.buffer_ms,"ms"),tile("Lost packets",lost,(st.concealed/192).toFixed(0)+" ms hidden",lost?C.warn:C.good),tile("Received",v.total_mb.toFixed(1),"MB")),
    el("p",{},dot(v.receiving?C.good:C.warn),ST.status),v.card?el("div",{class:"hint"},v.card):null));
-  const r=v.rds;m.append(card("RDS",r&&r.synced?el("div",{},el("span",{class:"ps"},r.ps||"        ")," ",el("span",{class:"hint"},"PI "+(r.pi!=null?r.pi.toString(16).toUpperCase().padStart(4,"0"):"-")+" · PTY "+(r.pty!=null?r.pty:"-")+" · "+Math.round(r.quality*100)+"% blocks ok"),
+  const r=v.rds;m.append(card("RDS",r&&r.synced?el("div",{},el("span",{class:"ps"},r.ps||"        ")," ",el("span",{class:"hint"},"PI "+(r.pi!=null?r.pi.toString(16).toUpperCase().padStart(4,"0"):"-")+(r.ecc!=null?" · ECC "+r.ecc.toString(16).toUpperCase():"")+" · PTY "+(r.pty!=null?r.pty:"-")+" · "+Math.round(r.quality*100)+"% blocks ok"),
    el("p",{},r.rt||"-"),(r.af&&r.af.length)?el("div",{class:"hint"},"AF "+r.af.map(f=>f.toFixed(1)).join("  ")+" MHz"):null,r.ct?el("div",{class:"hint"},"CT "+r.ct):null):el("p",{class:"hint"},v.receiving?"No RDS in the signal":"No signal")));
   const p=v.protect||{};const pl=[];if(v.receiving)pl.push([p.encrypted?C.good:C.dim,p.encrypted?"Encrypted, password correct":"Not encrypted"]);
   if(p.fec_n)pl.push([p.lost?C.warn:C.good,"FEC 1 per "+p.fec_n+(p.fec_depth>1?", bursts of "+p.fec_depth:"")+": restored "+p.restored+", could not restore "+p.lost]);

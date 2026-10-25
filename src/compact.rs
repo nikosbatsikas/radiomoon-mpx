@@ -81,6 +81,8 @@ fn rds_block(d: &RdsData) -> Vec<u8> {
     v.push(d.ct_offset as u8);
     // version 1.10: automatic daylight saving time (older receivers ignore it)
     v.push(d.ct_dst);
+    // version 1.12: Extended Country Code (older receivers ignore it)
+    v.push(d.ecc);
     v
 }
 
@@ -106,6 +108,7 @@ fn parse_rds(b: &[u8]) -> Option<RdsData> {
         d.ct = *b.get(at + 2 + n)? != 0;
         d.ct_offset = *b.get(at + 3 + n)? as i8;
         d.ct_dst = b.get(at + 4 + n).copied().unwrap_or(0);
+        d.ecc = b.get(at + 5 + n).copied().unwrap_or(0);
     }
     Some(d)
 }
@@ -543,10 +546,10 @@ mod tests {
 
     #[test]
     fn rds_block_roundtrip() {
-        let d = RdsData { enabled: true, pi: 0xA1B2, ps: "MOON FM".into(), rt: "Νίκος - Τραγούδι".into(), pty: 10, tp: true, ta: false, music: true, af: vec![68, 140], ct: true, ct_offset: -10, ct_dst: 1 };
+        let d = RdsData { enabled: true, pi: 0xA1B2, ps: "MOON FM".into(), rt: "Νίκος - Τραγούδι".into(), pty: 10, tp: true, ta: false, music: true, af: vec![68, 140], ct: true, ct_offset: -10, ct_dst: 1, ecc: 0xE1 };
         let e = parse_rds(&rds_block(&d)).unwrap();
         assert_eq!((e.pi, &e.ps, &e.rt, e.pty, e.tp, e.ta, e.music, e.enabled), (d.pi, &d.ps, &d.rt, d.pty, d.tp, d.ta, d.music, d.enabled));
-        assert_eq!((e.af, e.ct, e.ct_offset, e.ct_dst), (d.af, d.ct, d.ct_offset, d.ct_dst));
+        assert_eq!((e.af, e.ct, e.ct_offset, e.ct_dst, e.ecc), (d.af, d.ct, d.ct_offset, d.ct_dst, d.ecc));
     }
 
     #[test]

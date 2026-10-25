@@ -384,6 +384,14 @@ impl App {
                 cap(ui, "PI code (hex)");
                 ui.horizontal(|ui| {
                     ch |= ui.add(egui::TextEdit::singleline(&mut c.pi).desired_width(60.0).char_limit(4)).changed();
+                    cap(ui, "ECC");
+                    ch |= ui
+                        .add(egui::TextEdit::singleline(&mut c.ecc).desired_width(34.0).char_limit(2).hint_text("E1"))
+                        .on_hover_text("Extended Country Code (group 1A), hex: with the first digit of the PI it names the country world-wide. Greece E1 (PI 1xxx), Cyprus E2 (PI 2xxx). Empty: not sent. Cars with hybrid radio (RadioDNS) need it to find the station's logo.")
+                        .changed();
+                    if !c.ecc.trim().is_empty() && radiomoon_mpx::mpxdsp::parse_ecc(&c.ecc).is_none() {
+                        ui.label(RichText::new("not valid (A0 - F4)").small().color(look::WARN));
+                    }
                     cap(ui, "PTY");
                     ch |= ui.add(egui::DragValue::new(&mut c.pty).range(0..=31)).changed();
                     ui.label(RichText::new(radiomoon_mpx::rdsdec::pty_name(c.pty)).small().color(look::DIM));

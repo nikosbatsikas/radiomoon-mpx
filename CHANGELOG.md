@@ -2,6 +2,10 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.0
+- **RDS: Extended Country Code (ECC).** New field *ECC* next to the PI code (Transmitter window and web page): the Transmitter sends group 1A with the ECC about every 3.5 s. With the first digit of the PI it names the country world-wide - e.g. Greece E1 (PI 1xxx), Cyprus E2 (PI 2xxx) - as cars with hybrid radio (RadioDNS) need it to find the station's logo and information. Empty = not sent (as before).
+- The Receiver decodes the ECC and shows it next to the PI (window and web page); Compact MPX carries it, and an MPX input passes it on.
+
 ## 1.11.1
 - **AlmaLinux / Rocky Linux / RHEL / CentOS Stream / Fedora** for the headless editions: the installer uses dnf, opens the web port (and the Receiver's stream port 5004) in firewalld and sets the SELinux labels; then the Transmitter / Receiver runs as a systemd service.
 - The headless Linux packages are now built on AlmaLinux 8 (glibc 2.28), so they also run on AlmaLinux / RHEL 8 and 9, Debian 10 / 11 and Ubuntu 20.04 (1.11.0 needed glibc 2.35). Tested on AlmaLinux 9 and 10, Debian 12, Ubuntu 22.04 and 24.04.

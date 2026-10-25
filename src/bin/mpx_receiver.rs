@@ -234,6 +234,10 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("PI").small().color(look::DIM));
                         ui.label(RichText::new(r.pi.map(|p| format!("{p:04X}")).unwrap_or_else(|| "-".into())).monospace().strong());
+                        if let Some(e) = r.ecc {
+                            ui.label(RichText::new("ECC").small().color(look::DIM));
+                            ui.label(RichText::new(format!("{e:02X}")).monospace().strong());
+                        }
                         ui.label(RichText::new("PTY").small().color(look::DIM));
                         ui.label(r.pty.map(|p| format!("{p} {}", radiomoon_mpx::rdsdec::pty_name(p))).unwrap_or_else(|| "-".into()));
                     });

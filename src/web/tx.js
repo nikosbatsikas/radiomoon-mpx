@@ -66,7 +66,7 @@ function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
   m.append(saveBar());
  }
  else if(TAB==="rds"){
-  m.append(card("RDS",form([{p:"mpx.rds_on",l:"Send RDS",t:"bool"},{p:"mpx.pi",l:"PI code",ph:"1234"},{p:"mpx.ps",l:"Station name (PS)",ph:"RADIOMON",h:"8 characters, or a longer text shown in pages"},
+  m.append(card("RDS",form([{p:"mpx.rds_on",l:"Send RDS",t:"bool"},{p:"mpx.pi",l:"PI code",ph:"1234"},{p:"mpx.ecc",l:"ECC (country)",ph:"E1",h:"Extended Country Code, hex: Greece E1, Cyprus E2. Empty: not sent. Needed by RadioDNS hybrid radio in cars."},{p:"mpx.ps",l:"Station name (PS)",ph:"RADIOMON",h:"8 characters, or a longer text shown in pages"},
    {p:"mpx.ps_mode",l:"Long name",t:"select",o:[["static","First 8 characters"],["pages","In pages (whole words)"],["scroll","Scrolling"]]},{p:"mpx.ps_interval",l:"Seconds per page",t:"num",step:0.5,min:1},
    {p:"mpx.pty",l:"Programme type (PTY)",t:"num",int:1,min:0,max:31},{p:"mpx.tp",l:"TP",t:"bool"},{p:"mpx.ta",l:"TA",t:"bool"},{p:"mpx.music",l:"Music",t:"bool"},
    {p:"mpx.rt",l:"RadioText",ph:"RadioMoon"},{p:"mpx.rt_from_playlist",l:"RadioText from the stream's titles",t:"bool"},

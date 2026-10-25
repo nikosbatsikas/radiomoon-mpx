@@ -48,6 +48,9 @@ pub struct MpxCfg {
     /// Daylight saving time: "eu" | "us" (added to the offset automatically in summer) | "off".
     /// `ct_offset_h` is then the standard (winter) offset.
     pub ct_dst: String,
+    /// Extended Country Code (RDS group 1A), hex, e.g. "E1" for Greece; empty = not sent. With the first digit of the PI
+    /// it identifies the country world-wide (needed e.g. by RadioDNS hybrid radio in cars).
+    pub ecc: String,
     pub rt: String,
     pub rt_from_playlist: bool,
     pub pty: u8,
@@ -84,6 +87,7 @@ impl Default for MpxCfg {
             ct_on: false,
             ct_offset_h: 2.0,
             ct_dst: "eu".into(),
+            ecc: String::new(),
             pi: "1234".into(),
             ps: "RADIOMON".into(),
             rt: "RadioMoon".into(),

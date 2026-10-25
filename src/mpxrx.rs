@@ -152,12 +152,14 @@ pub struct RdsView {
     pub groups: u64,
     pub af: Vec<f32>,
     pub ct: String,
+    /// Extended Country Code.
+    pub ecc: Option<u8>,
 }
 
 impl RdsView {
     fn from(d: &RdsDecoder, receiving: bool) -> RdsView {
         let i = &d.info;
-        RdsView { synced: i.synced && receiving, pi: i.pi, ps: i.ps.clone(), rt: i.rt.clone(), pty: i.pty, tp: i.tp, ta: i.ta, music: i.music, quality: i.quality, groups: i.groups, af: i.af.clone(), ct: i.ct.clone() }
+        RdsView { synced: i.synced && receiving, pi: i.pi, ps: i.ps.clone(), rt: i.rt.clone(), pty: i.pty, tp: i.tp, ta: i.ta, music: i.music, quality: i.quality, groups: i.groups, af: i.af.clone(), ct: i.ct.clone(), ecc: i.ecc }
     }
 }
 
