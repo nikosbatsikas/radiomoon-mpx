@@ -45,6 +45,9 @@ pub struct MpxCfg {
     /// Clock time (CT) once a minute, with the local offset in hours.
     pub ct_on: bool,
     pub ct_offset_h: f32,
+    /// Daylight saving time: "eu" | "us" (added to the offset automatically in summer) | "off".
+    /// `ct_offset_h` is then the standard (winter) offset.
+    pub ct_dst: String,
     pub rt: String,
     pub rt_from_playlist: bool,
     pub pty: u8,
@@ -80,6 +83,7 @@ impl Default for MpxCfg {
             af: String::new(),
             ct_on: false,
             ct_offset_h: 2.0,
+            ct_dst: "eu".into(),
             pi: "1234".into(),
             ps: "RADIOMON".into(),
             rt: "RadioMoon".into(),

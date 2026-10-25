@@ -17,9 +17,19 @@ These programs were part of the RadioMoon repository up to version 0.5.30.
 |---|---|
 | Windows x64 / x86 / arm64 | `RadioMoon-MPX-<ver>-windows-<arch>-setup.exe`, or the portable `...-portable.zip` |
 | Linux x64 / arm64 (Raspberry Pi 3/4/5, 64-bit OS) | `RadioMoon-MPX-Transmitter-<ver>-linux-<arch>.tar.gz`, `RadioMoon-MPX-Receiver-<ver>-linux-<arch>.tar.gz` |
-| macOS (Apple Silicon) | `RadioMoon-MPX-<ver>-macos-arm64.dmg` (both apps) |
+| macOS (Apple Silicon) | `RadioMoon-MPX-<ver>-macos-arm64.dmg` (both apps and the CLAP plug-in) |
+| CLAP plug-in | in every package: Windows setup (option "Install the CLAP plug-in"), `CLAP\RadioMoon-MPX-Transmitter.clap` in the zip, `RadioMoon-MPX-Transmitter.clap` in the Linux transmitter package, `RadioMoon MPX Transmitter.clap` in the dmg |
 
 Linux needs a desktop session and `libasound2`. A 192 kHz capable sound card is required for the composite output.
+
+## CLAP plug-in
+
+The Transmitter is also a **CLAP plug-in** ("RadioMoon MPX Transmitter", vendor RadioMoon) for audio programs that load CLAP plug-ins: REAPER, Bitwig Studio, FL Studio, Studio One, MultitrackStudio and others. Put it on the master track (or any stereo track): the audio passes through unchanged, and the plug-in builds the multiplex from it - stereo, pilot, RDS, Compact MPX, SFN time stamps, QoS - and sends it to the IP targets and / or the 192 kHz sound card, exactly as the Transmitter program would.
+
+- **Install:** Windows: the setup's option copies it to `C:\Program Files\Common Files\CLAP` (the x86 setup to the 32-bit Common Files, for 32-bit hosts). Linux: copy `RadioMoon-MPX-Transmitter.clap` to `~/.clap` (or `/usr/lib/clap`). macOS: copy `RadioMoon MPX Transmitter.clap` from the dmg to `~/Library/Audio/Plug-Ins/CLAP`. Then let the audio program rescan its plug-ins.
+- **Settings:** the plug-in uses the settings of the Transmitter program (targets, signal, RDS, SFN ...): set them up in the Transmitter window. While the plug-in runs, the window shows **PLUG-IN** and its live status (links, Mbit/s, levels, scope); changes made in the window reach the plug-in within a quarter of a second (outputs and SFN restart its engine, level and RDS are applied at once). The window's own Start is not needed then, and the service should be stopped.
+- **Portable:** a `mpx-transmitter.json` next to the plug-in file, or in the folder above it (the portable zip), is used instead of the shared settings.
+- The plug-in takes any sample rate of the host (44.1, 48, 96 kHz ...). The audio thread never waits: if the host renders faster than real time (export / freeze), the extra audio is dropped from the MPX, the track itself is not affected.
 
 ## AES67 / Dante input
 

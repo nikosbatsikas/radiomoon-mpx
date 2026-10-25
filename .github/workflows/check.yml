@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo build --release --message-format=short 2>&1 | tee build.log
+          cargo build --release -p radiomoon-mpx -p radiomoon_mpx_clap --message-format=short 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
           ERR=$(grep -E ': error' build.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
           WARN=$(grep -E ': warning' build.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
@@ -26,6 +26,7 @@ jobs:
           [ -n "$WARN" ] && echo "::warning title=Compiler warnings::$WARN"
           [ $RC -eq 0 ] || exit $RC
           cargo test --release --lib
+          ls -l target/release/libradiomoon_mpx_clap.so
   windows:
     runs-on: windows-latest
     strategy:
@@ -41,4 +42,4 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} -p radiomoon-mpx -p radiomoon_mpx_clap

@@ -42,9 +42,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "clap"; Description: "Install the CLAP plug-in (RadioMoon MPX Transmitter) for audio programs: Common Files\CLAP"; GroupDescription: "Plug-in:"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; the standard CLAP folder, where REAPER, Bitwig, FL Studio, Studio One ... look for plug-ins
+Source: "{#SourceDir}\CLAP\RadioMoon-MPX-Transmitter.clap"; DestDir: "{commoncf}\CLAP"; Tasks: clap; Flags: ignoreversion
 
 [Dirs]
 ; settings shared by all users of the PC (mpx-transmitter.json, mpx-receiver.json)

@@ -476,6 +476,11 @@ pub fn rds_of(c: &MpxCfg, rt: &str) -> RdsData {
         af: crate::mpxdsp::parse_af(&c.af),
         ct: c.ct_on,
         ct_offset: (c.ct_offset_h * 2.0).round().clamp(-31.0, 31.0) as i8,
+        ct_dst: match c.ct_dst.as_str() {
+            "eu" => 1,
+            "us" => 2,
+            _ => 0,
+        },
     }
 }
 
@@ -606,7 +611,9 @@ impl MpxHandle {
                                 music: i.music,
                                 af: i.af.iter().filter_map(|f| crate::mpxdsp::af_code(*f)).collect(),
                                 ct: !i.ct.is_empty(),
+                                // the offset as received already includes daylight saving time
                                 ct_offset: i.ct_offset.unwrap_or(0),
+                                ct_dst: 0,
                             };
                             if let Ok(mut g) = pa.lock() {
                                 *g = (p, r);

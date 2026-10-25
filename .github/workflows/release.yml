@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo build --release --message-format=short 2>&1 | tee build.log
+          cargo build --release -p radiomoon-mpx -p radiomoon_mpx_clap --message-format=short 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
           ERR=$(grep -E ': error' build.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
           WARN=$(grep -E ': warning' build.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
@@ -72,6 +72,7 @@ jobs:
           mkdir -p dist RadioMoon-MPX-Receiver RadioMoon-MPX-Transmitter
           cp target/release/radiomoon-mpx-receiver README.md CHANGELOG.md RadioMoon-MPX-Receiver/
           cp target/release/radiomoon-mpx-transmitter README.md CHANGELOG.md RadioMoon-MPX-Transmitter/
+          cp target/release/libradiomoon_mpx_clap.so RadioMoon-MPX-Transmitter/RadioMoon-MPX-Transmitter.clap
           tar czf dist/RadioMoon-MPX-Receiver-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Receiver
           tar czf dist/RadioMoon-MPX-Transmitter-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Transmitter
       - uses: actions/upload-artifact@v4
@@ -86,7 +87,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release
+        run: cargo build --release -p radiomoon-mpx -p radiomoon_mpx_clap
       - name: App bundles and dmg
         run: |
           V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
@@ -102,6 +103,13 @@ jobs:
             iconutil -c icns icon.iconset -o "$APP/Contents/Resources/RadioMoon.icns"
             sed -e "s/@VERSION@/$V/g" -e "s/@NAME@/$NAME/g" -e "s/@EXE@/$EXE/g" -e "s/@ID@/com.radiomoon.mpx.$(echo ${P%%:*} | tr A-Z a-z)/g" packaging/macos/Info.plist.in > "$APP/Contents/Info.plist"
           done
+          # the CLAP plug-in bundle (copy it to /Library/Audio/Plug-Ins/CLAP or ~/Library/Audio/Plug-Ins/CLAP)
+          CLAP="dist/dmg/RadioMoon MPX Transmitter.clap"
+          mkdir -p "$CLAP/Contents/MacOS"
+          cp target/release/libradiomoon_mpx_clap.dylib "$CLAP/Contents/MacOS/RadioMoon-MPX-Transmitter"
+          sed -e "s/@VERSION@/$V/g" packaging/macos/Clap.plist.in > "$CLAP/Contents/Info.plist"
+          printf 'BNDL????' > "$CLAP/Contents/PkgInfo"
+          codesign --force --sign - "$CLAP" || true
           hdiutil create -volname "RadioMoon MPX" -srcfolder dist/dmg -ov -format UDZO dist/RadioMoon-MPX-$V-macos-arm64.dmg
           rm -rf dist/dmg
       - uses: actions/upload-artifact@v4

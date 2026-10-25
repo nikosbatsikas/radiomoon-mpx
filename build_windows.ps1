@@ -9,7 +9,7 @@ Set-Location $PSScriptRoot
 $targets = @{ x64 = "x86_64-pc-windows-msvc"; x86 = "i686-pc-windows-msvc"; arm64 = "aarch64-pc-windows-msvc" }
 $target = $targets[$Arch]
 rustup target add $target
-cargo build --release --target $target
+cargo build --release --target $target -p radiomoon-mpx -p radiomoon_mpx_clap
 if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
 $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
@@ -19,6 +19,9 @@ New-Item -ItemType Directory -Force $stage, "dist" | Out-Null
 Copy-Item "target\$target\release\radiomoon-mpx-transmitter.exe" "$stage\RadioMoon-MPX-Transmitter.exe"
 Copy-Item "target\$target\release\radiomoon-mpx-receiver.exe" "$stage\RadioMoon-MPX-Receiver.exe"
 Copy-Item "README.md", "CHANGELOG.md" $stage
+# the CLAP plug-in (a DLL with the .clap extension)
+New-Item -ItemType Directory -Force "$stage\CLAP" | Out-Null
+Copy-Item "target\$target\release\radiomoon_mpx_clap.dll" "$stage\CLAP\RadioMoon-MPX-Transmitter.clap"
 
 $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
