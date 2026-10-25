@@ -26,7 +26,8 @@ async def shoot(p, port, name, tabs):
 
 async def main():
     async with async_playwright() as p:
-        await shoot(p, 8080, "transmitter", [("Status", "status"), ("Audio source", "source"), ("IP output", "ip"), ("Sound card output", "card"), ("Signal", "signal"), ("RDS", "rds"), ("SFN", "sfn"), ("Login", "login-tab")])
+        # the receiver first (its SFN has locked by then), the transmitter after
         await shoot(p, 8081, "receiver", [("Status", "status"), ("Log", "log"), ("Input & protection", "input"), ("Output", "output"), ("SFN", "sfn"), ("Backup", "backup"), ("Login", "login-tab")])
+        await shoot(p, 8080, "transmitter", [("Status", "status"), ("Audio source", "source"), ("IP output", "ip"), ("Sound card output", "card"), ("Signal", "signal"), ("RDS", "rds"), ("SFN", "sfn"), ("Login", "login-tab")])
 
 asyncio.run(main())

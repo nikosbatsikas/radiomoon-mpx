@@ -20,7 +20,7 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils libxkbcommon-x11-0
+          sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libgl1-mesa-dri mesa-utils x11-utils libxkbcommon-x11-0 ffmpeg
       - name: Build
         run: cargo build --release --bin radiomoon-mpx-transmitter --bin radiomoon-mpx-receiver --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
       - name: Screenshots of the windows
@@ -35,6 +35,12 @@ jobs:
           Xvfb :99 -screen 0 1400x1000x24 & sleep 2
           export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1
           glxinfo -B 2>&1 | head -8 || true
+          # demo audio for the Transmitter's stream source: pink noise and a chord, stereo, served over HTTP
+          mkdir -p demo
+          ffmpeg -loglevel error -f lavfi -i "anoisesrc=color=pink:amplitude=0.25:d=900" -f lavfi -i "sine=f=220:d=900" -f lavfi -i "sine=f=330:d=900" \
+            -filter_complex "[0][1]amix=inputs=2[l];[0][2]amix=inputs=2[r];[l][r]join=inputs=2:channel_layout=stereo,volume=0.8[a]" -map "[a]" -ar 44100 -b:a 192k demo/demo.mp3
+          (cd demo && python3 -m http.server 8000 > ../logs/http.log 2>&1 &)
+          sleep 1
           T=target/release/radiomoon-mpx-transmitter; R=target/release/radiomoon-mpx-receiver
           grab() { # $1 = window title, $2 = file
             W=$(timeout 20 xdotool search --sync --onlyvisible --name "^$1\$" | head -n1)
@@ -69,7 +75,8 @@ jobs:
           target/release/radiomoon-mpx-rxd --data data --listen 127.0.0.1:8081 > rxd.log 2>&1 &
           target/release/radiomoon-mpx-txd --data data --listen 127.0.0.1:8080 > txd.log 2>&1 &
           pip install -q playwright && python -m playwright install --with-deps chromium > /dev/null
-          sleep 30
+          (cd demo && python3 -m http.server 8000 > /dev/null 2>&1 &)
+          sleep 60
           python packaging/wiki/web_shots.py shots wiki-demo-pass
           ls -l shots
       - name: Put the screenshots into the wiki

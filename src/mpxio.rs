@@ -167,20 +167,21 @@ fn open_card(name: &str, q: Arc<Queue>) -> Result<Stream, String> {
 /// For tests (the receiving, the analysis, the log and SFN work as with a card) and for sites without a card yet.
 pub const NO_CARD: &str = "No sound card (test output)";
 
-/// Calls `f` with blocks of 10 ms (1920 samples) at real-time pace until `stop`.
-fn paced(stop: &AtomicBool, mut f: impl FnMut(&mut Vec<f32>)) {
+/// Calls `f` with blocks of 10 ms (1920 samples) at real-time pace until `stop`, like a sound card with an exact
+/// clock: the second argument is the time (ns, from now) at which the block would be heard - negative when the
+/// computer was busy and the block comes late (it is still taken, as a card's buffer would be).
+fn paced(stop: &AtomicBool, mut f: impl FnMut(&mut Vec<f32>, i128)) {
     let t0 = std::time::Instant::now();
     let mut n: u64 = 0;
     let mut buf = vec![0f32; 1920];
     while !stop.load(Ordering::Relaxed) {
-        n += 1;
         let due = Duration::from_micros(n * 10_000);
+        n += 1;
         if let Some(w) = due.checked_sub(t0.elapsed()) {
             std::thread::sleep(w);
-        } else if t0.elapsed() > due + Duration::from_millis(500) {
-            n = (t0.elapsed().as_micros() / 10_000) as u64; // the computer was busy: do not catch up
         }
-        f(&mut buf);
+        let heard_in = due.as_nanos() as i128 - t0.elapsed().as_nanos() as i128;
+        f(&mut buf, heard_in);
     }
 }
 
@@ -189,7 +190,7 @@ pub fn card_thread(name: String, q: Arc<Queue>, stop: Arc<AtomicBool>, status: T
         std::thread::spawn(move || {
             let mut last = std::time::Instant::now();
             let mut out = Vec::with_capacity(1920);
-            paced(&stop, |_| {
+            paced(&stop, |_, _| {
                 out.clear();
                 if !q.pop_n(1920, &mut out) {
                     q.under.fetch_add(1, Ordering::Relaxed);
@@ -258,8 +259,8 @@ pub fn sfn_card_thread(name: String, pl: Arc<crate::sfn::SfnPlayout>, stop: Arc<
     if name == NO_CARD {
         std::thread::spawn(move || {
             let mut last = std::time::Instant::now();
-            paced(&stop, |buf| {
-                pl.render(buf, 0);
+            paced(&stop, |buf, heard_in| {
+                pl.render(buf, heard_in);
                 if last.elapsed() > Duration::from_millis(400) {
                     last = std::time::Instant::now();
                     set(&status, &format!("{label}: none (test output, nothing is played), SFN playout, buffer {} ms", pl.ms()));

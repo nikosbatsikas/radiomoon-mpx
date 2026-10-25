@@ -1,6 +1,6 @@
 {
   "kind": "stream",
-  "url": "",
+  "url": "http://127.0.0.1:8000/demo.mp3",
   "gain_db": 0.0,
   "close_to_tray": false,
   "fit_window": true,
