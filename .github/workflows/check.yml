@@ -49,22 +49,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: headless
-      - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - name: Build the headless editions (no window libraries)
+      - name: Build the headless editions on AlmaLinux 8 (glibc 2.28, runs on old and new systems)
+        shell: bash
         run: |
-          cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
-          ldd target/release/radiomoon-mpx-rxd
-          target/release/radiomoon-mpx-rxd --version
+          set +e
+          docker run --rm -v "$PWD":/src -w /src almalinux:8 sh packaging/headless/build-glibc.sh > glibc.log 2>&1
+          RC=$?; cat glibc.log
+          [ $RC -eq 0 ] || { echo "::error title=glibc build::$(grep -v Compiling glibc.log | tail -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"; exit $RC; }
+          echo "::notice title=glibc build::needs $(tail -n1 glibc.log)"
+      - name: Run them on AlmaLinux 9 and 10, Debian 11 and Ubuntu 24.04
+        shell: bash
+        run: |
+          sudo chown -R $(id -u) target/glibc
+          for IMG in almalinux:9 almalinux:10 debian:11 ubuntu:24.04; do
+            OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b "$IMG" sh -c '
+              (command -v dnf >/dev/null && dnf install -y -q alsa-lib curl >/dev/null) || (apt-get update -qq >/dev/null && (apt-get install -y -qq libasound2 curl >/dev/null 2>&1 || apt-get install -y -qq libasound2t64 curl >/dev/null))
+              /b/radiomoon-mpx-rxd --version
+              mkdir -p /tmp/d && (/b/radiomoon-mpx-rxd --data /tmp/d --listen 127.0.0.1:8081 >/tmp/log 2>&1 &)
+              sleep 2; curl -s -o /dev/null -w "page %{http_code}" http://127.0.0.1:8081/' 2>&1 | tail -n 2 | tr "\n" " ")
+            echo "$IMG: $OUT"
+            echo "$OUT" | grep -q "page 200" || { echo "::error title=$IMG::$OUT"; exit 1; }
+            echo "::notice title=$IMG::$OUT"
+          done
       - name: Unit tests without the windows
-        run: cargo test --release --lib --no-default-features
+        run: |
+          sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+          cargo test --release --lib --no-default-features
       - name: Install with the installer (systemd) and check the web interfaces
         shell: bash
         run: |
-          mkdir -p pkg && cp target/release/radiomoon-mpx-txd target/release/radiomoon-mpx-rxd packaging/headless/install.sh pkg/
+          mkdir -p pkg && cp target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd packaging/headless/install.sh pkg/
           sudo RM_PASSWORD=secret-pass-1 sh pkg/install.sh both
           sleep 3
           systemctl --no-pager status radiomoon-mpx-rxd radiomoon-mpx-txd | head -30 || true

@@ -77,13 +77,14 @@ jobs:
           cp target/release/libradiomoon_mpx_clap.so RadioMoon-MPX-Transmitter/RadioMoon-MPX-Transmitter.clap
           tar czf dist/RadioMoon-MPX-Receiver-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Receiver
           tar czf dist/RadioMoon-MPX-Transmitter-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Transmitter
-      - name: Headless edition (web interface; Debian / Ubuntu / Raspberry Pi OS)
+      - name: Headless edition (web interface; built on AlmaLinux 8 for Debian / Ubuntu / Raspberry Pi OS / AlmaLinux / RHEL)
         run: |
           V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+          docker run --rm -v "$PWD":/src -w /src almalinux:8 sh packaging/headless/build-glibc.sh
+          sudo chown -R $(id -u) target/glibc
           D=RadioMoon-MPX-Headless-$V
           mkdir -p $D
-          cp target/release/radiomoon-mpx-txd target/release/radiomoon-mpx-rxd packaging/headless/install.sh packaging/headless/README.txt CHANGELOG.md $D/
+          cp target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd packaging/headless/install.sh packaging/headless/README.txt CHANGELOG.md $D/
           tar czf dist/RadioMoon-MPX-Headless-linux-${{ matrix.arch }}.tar.gz $D
       - uses: actions/upload-artifact@v4
         with:

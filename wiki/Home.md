@@ -8,7 +8,7 @@ Two programs for FM broadcasting over IP:
 | Edition | For | Pages |
 |---|---|---|
 | Desktop (window) | Windows, macOS, Linux desktop | [[Installation]], [[Transmitter]], [[Receiver]] |
-| Headless (web interface) | Linux servers, Raspberry Pi, **Alpine Linux** | [[Headless and Web Interface]], [[Alpine Linux]], [[Raspberry Pi]] |
+| Headless (web interface) | Linux servers, Raspberry Pi, **Alpine Linux** | [[Headless and Web Interface]], [[Alpine Linux]], [[AlmaLinux]], [[Raspberry Pi]] |
 | CLAP plug-in | REAPER, Bitwig, FL Studio, Studio One ... | [[CLAP Plug-in]] |
 
 Topics: [[IP Transport and Formats]] · [[QoS on Windows]] · [[Protection]] (encryption, FEC, allowed senders) · [[SFN]] · [[RDS]] · [[Backup Source]] · [[Receiver Log]] · [[Service and Tray]] · [[Troubleshooting]]

@@ -7,7 +7,7 @@ For Linux servers and Raspberry Pi without a desktop (and [[Alpine Linux]]): two
 | `radiomoon-mpx-txd` (Transmitter) | 8080 | `/var/lib/radiomoon-mpx/mpx-transmitter.json` |
 | `radiomoon-mpx-rxd` (Receiver) | 8081 | `/var/lib/radiomoon-mpx/mpx-receiver.json` |
 
-## Install (Debian 12+, Ubuntu 22.04+, Raspberry Pi OS 64-bit bookworm+, Alpine)
+## Install (Debian 10+, Ubuntu 20.04+, Raspberry Pi OS 64-bit, AlmaLinux / Rocky / RHEL 8+, Fedora, Alpine)
 ```sh
 wget -qO- https://raw.githubusercontent.com/nikosbatsikas/radiomoon-mpx/main/packaging/headless/install.sh | sudo sh -s -- receiver
 ```

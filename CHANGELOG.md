@@ -2,6 +2,12 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.11.1
+- **AlmaLinux / Rocky Linux / RHEL / CentOS Stream / Fedora** for the headless editions: the installer uses dnf, opens the web port (and the Receiver's stream port 5004) in firewalld and sets the SELinux labels; then the Transmitter / Receiver runs as a systemd service.
+- The headless Linux packages are now built on AlmaLinux 8 (glibc 2.28), so they also run on AlmaLinux / RHEL 8 and 9, Debian 10 / 11 and Ubuntu 20.04 (1.11.0 needed glibc 2.35). Tested on AlmaLinux 9 and 10, Debian 11 and Ubuntu 24.04.
+- The installer stops with a clear message when the program cannot run on the system.
+- Wiki: AlmaLinux page, QoS on Windows.
+
 ## 1.11.0
 - **Headless editions with a web interface** (Linux, Raspberry Pi, **Alpine Linux**): `radiomoon-mpx-txd` (Transmitter, port 8080) and `radiomoon-mpx-rxd` (Receiver, port 8081) run without a desktop as services and are set up in a browser: live status with spectrum, levels and RDS, every setting of the window programs, the Receiver's log, and the login. Login with user and password (PBKDF2), HttpOnly / SameSite cookies, protection against cross-site requests and a lock-out after 10 wrong passwords. Same settings files as the window programs.
 - **Installer** `packaging/headless/install.sh` (one command): Alpine (OpenRC, supervise-daemon) and Debian / Ubuntu / Raspberry Pi OS (systemd); installs ALSA, a service user, the service and the web password; `uninstall` removes it. New packages: `RadioMoon-MPX-Headless-alpine-x64/arm64.tar.gz` (musl, built on Alpine) and `RadioMoon-MPX-Headless-linux-x64/arm64.tar.gz`.
