@@ -3,7 +3,9 @@
 # on AlmaLinux / Rocky / RHEL 8+, Debian 10+, Ubuntu 20.04+, Raspberry Pi OS (64-bit) and Fedora:
 #   docker run --rm -v "$PWD":/src -w /src almalinux:8 sh packaging/headless/build-glibc.sh
 set -eu
-dnf install -y -q gcc gcc-c++ make cmake perl pkgconf-pkg-config alsa-lib-devel curl >/dev/null
+dnf install -y -q gcc gcc-c++ make cmake perl pkgconf-pkg-config alsa-lib-devel curl gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ >/dev/null
+# the system GCC 8 cannot build the AVX2 code of Opus: use GCC 12 (the programs still need only glibc 2.28)
+. /opt/rh/gcc-toolset-12/enable
 if ! command -v cargo >/dev/null 2>&1; then
   curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
 fi
