@@ -70,10 +70,11 @@ jobs:
           systemctl --no-pager status radiomoon-mpx-rxd radiomoon-mpx-txd | head -30 || true
           curl -sf -o /dev/null http://127.0.0.1:8081/
           curl -sf -c cj -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8081/api/login | grep -q ok
-          curl -sf -b cj http://127.0.0.1:8081/api/status | head -c 200; echo
+          curl -sf -b cj -o rx.json http://127.0.0.1:8081/api/status; head -c 200 rx.json; echo
           curl -sf -c cj2 -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8080/api/login | grep -q ok
-          curl -sf -b cj2 http://127.0.0.1:8080/api/status | head -c 200; echo
-          sudo journalctl -u radiomoon-mpx-rxd --no-pager | tail -5
+          curl -sf -b cj2 -o tx.json http://127.0.0.1:8080/api/status; head -c 200 tx.json; echo
+          echo "::notice title=systemd install test::$(head -c 300 rx.json)"
+          sudo journalctl -u radiomoon-mpx-rxd --no-pager > j.txt || true; tail -5 j.txt
           sudo sh pkg/install.sh uninstall
 
   alpine:
