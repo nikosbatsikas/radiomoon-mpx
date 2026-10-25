@@ -4,7 +4,7 @@ name: wiki-screenshots
 on:
   workflow_dispatch:
   push:
-    branches: [main, work-wiki-guide]
+    branches: [main]
     paths: ["src/**", "packaging/wiki/**", ".github/workflows/wiki-screenshots.yml"]
 permissions:
   contents: write

@@ -36,6 +36,13 @@ impl Timeline {
     /// previous call.
     pub fn update(&self, k_end: u64, dt: f64) {
         let Some(now) = self.clock.now_ns() else { return };
+        self.update_at(now, k_end, dt);
+    }
+
+    /// The same at a given time (now, ns). The stamps must advance smoothly: the generator works in bursts (a
+    /// stream arrives in chunks, a busy computer delays it), so the correction follows the clock only slowly
+    /// (about 60 s) and never faster than 200 ppm - the Receivers then play at the nominal rate +- a few ppm.
+    fn update_at(&self, now: i128, k_end: u64, dt: f64) {
         let Ok(mut g) = self.g.lock() else { return };
         let nominal = (k_end as f64 * 1e9 / FS) as i128;
         match g.as_mut() {
@@ -47,7 +54,8 @@ impl Timeline {
                     *t0 = now - nominal;
                     *corr = 0.0;
                 } else {
-                    *corr += (raw - *corr) * (dt / 10.0).clamp(0.0, 0.05);
+                    let max = dt.max(0.0) * 1e9 * 200e-6;
+                    *corr += ((raw - *corr) * (dt / 60.0).clamp(0.0, 0.01)).clamp(-max, max);
                 }
             }
         }
@@ -487,6 +495,45 @@ impl SfnPlayout {
 mod tests {
     use super::*;
     use crate::clock::{ClockCfg, RefClock};
+
+    /// The generator produces in bursts (chunks of a stream, stalls of a busy computer): the stamps must still
+    /// advance at the nominal rate within 200 ppm, and follow a slow drift of the source (here 80 ppm).
+    #[test]
+    fn timeline_is_smooth_with_bursty_production() {
+        let tl = Timeline::new(RefClock::start(&ClockCfg::default()));
+        let t0: i128 = 1_800_000_000_000_000_000;
+        let (mut k, mut t) = (0u64, 0.0f64); // samples produced, real seconds
+        let mut x: u64 = 99;
+        let mut worst = 0f64;
+        let mut last: Option<(u64, i64)> = None;
+        for step in 0..60_000 {
+            // 10 ms steps of real time; the source runs 80 ppm fast; production comes in bursts of 0 - 4 blocks
+            t += 0.01;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let due = (t * FS * (1.0 + 80e-6)) as u64;
+            if x % 4 != 0 || k + 1920 * 6 < due {
+                while k < due {
+                    k += 1920;
+                }
+            }
+            tl.update_at(t0 + (t * 1e9) as i128, k, 0.01);
+            if step % 100 == 0 {
+                let s = tl.stamp(k).unwrap();
+                if let Some((k1, s1)) = last {
+                    if step > 20_000 {
+                        // stamp rate against the samples: 1 s of samples should take 1 s / (1 + 80 ppm)
+                        let rate = (s - s1) as f64 / ((k - k1) as f64 * 1e9 / FS);
+                        worst = worst.max((rate - 1.0 / (1.0 + 80e-6)).abs() * 1e6);
+                    }
+                }
+                last = Some((k, s));
+            }
+        }
+        eprintln!("time line: worst stamp rate error {worst:.1} ppm");
+        assert!(worst < 200.0, "{worst}");
+    }
 
     #[test]
     fn rtp_extension_roundtrip() {
