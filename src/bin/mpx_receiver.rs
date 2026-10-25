@@ -458,6 +458,8 @@ impl App {
                 for d in &self.devs {
                     ch |= ui.selectable_value(&mut self.s.device, d.clone(), d).changed();
                 }
+                ui.separator();
+                ch |= ui.selectable_value(&mut self.s.device, radiomoon_mpx::mpxio::NO_CARD.to_string(), radiomoon_mpx::mpxio::NO_CARD).on_hover_text("Plays nothing: for tests of the link, the analysis, the log and SFN without a 192 kHz card").changed();
             });
             ui.horizontal(|ui| {
                 cap(ui, "Buffer");
@@ -521,9 +523,17 @@ impl App {
                         Tile::new("Rate trim", format!("{:+.2}", s.ppm), "ppm", look::TEXT),
                         Tile::new("Arrival margin", if s.margin_ms.is_finite() && s.margin_ms < 1e6 { format!("{:.0}", s.margin_ms) } else { "-".into() }, "ms", if s.margin_ms < 20.0 { look::WARN } else { look::TEXT }),
                         Tile::new("Stamp jitter", format!("±{:.1}", s.stamp_jitter_us), "µs", look::TEXT),
+                        Tile::new("Card jitter", if s.card_jitter_us >= 1000.0 { format!("{:.1}", s.card_jitter_us / 1000.0) } else { format!("{:.0}", s.card_jitter_us) }, if s.card_jitter_us >= 1000.0 { "ms" } else { "µs" }, if s.card_jitter_us > 3000.0 { look::WARN } else { look::TEXT }),
                         Tile::new("Restarts", s.resyncs.to_string(), "", look::TEXT),
                     ],
                 );
+                // a margin longer than the delay is only possible when the Transmitter's clock runs ahead of this one
+                if s.margin_ms.is_finite() && s.margin_ms < 1e6 && s.margin_ms > self.s.sfn_delay_ms + 20.0 {
+                    ui.horizontal_wrapped(|ui| {
+                        look::dot(ui, look::WARN);
+                        ui.label(RichText::new(format!("The arrival margin is longer than the delay: the Transmitter's clock is about {:.0} ms ahead of this computer's. Synchronise the clocks of all sites (NTP / chrony at least, GPS or PTP for SFN).", s.margin_ms - self.s.sfn_delay_ms)).small().color(look::WARN));
+                    });
+                }
             }
         });
         if self.s.sfn_on {
