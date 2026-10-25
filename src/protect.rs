@@ -242,6 +242,8 @@ pub struct Unprotector {
     flags: u8,
     fec_n: u8,
     depth: u8,
+    /// The first sequence number received.
+    first: u32,
 }
 
 fn ahead(a: u32, b: u32) -> i64 {
@@ -251,7 +253,7 @@ fn ahead(a: u32, b: u32) -> i64 {
 impl Unprotector {
     pub fn new(password: &str) -> Unprotector {
         let key = (!password.is_empty()).then(|| stream_key(password));
-        Unprotector { key, stats: ProtStats::default(), have: BTreeMap::new(), fecs: HashMap::new(), next: None, top: 0, flags: 0, fec_n: 0, depth: 1 }
+        Unprotector { key, stats: ProtStats::default(), have: BTreeMap::new(), fecs: HashMap::new(), next: None, top: 0, flags: 0, fec_n: 0, depth: 1, first: 0 }
     }
 
     pub fn has_password(&self) -> bool {
@@ -293,8 +295,10 @@ impl Unprotector {
             }
         }
         if self.next.is_none() {
-            // start at the beginning of a group, so the first group can be restored too
+            // start at the beginning of its group, so the first group can be restored too (packets before the
+            // first one received that cannot be restored are not counted as lost: they were never ours)
             self.next = Some(if n > 0 && !fec { seq - seq % block } else { seq });
+            self.first = seq;
             self.top = seq;
         }
         self.flags = flags;
@@ -399,7 +403,9 @@ impl Unprotector {
             if !give_up {
                 break;
             }
-            self.stats.lost += 1;
+            if ahead(nx, self.first) >= 0 {
+                self.stats.lost += 1;
+            }
             self.next = Some(nx.wrapping_add(1));
         }
         // forget what is no longer needed for FEC

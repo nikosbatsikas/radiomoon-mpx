@@ -43,3 +43,45 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p radiomoon-mpx -p radiomoon_mpx_clap
+
+  headless-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: headless
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build the headless editions (no window libraries)
+        run: |
+          cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+          ldd target/release/radiomoon-mpx-rxd
+          target/release/radiomoon-mpx-rxd --version
+      - name: Unit tests without the windows
+        run: cargo test --release --lib --no-default-features
+
+  alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build on Alpine (musl) and test the installer with OpenRC
+        run: |
+          docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh -c '
+            set -e
+            sh packaging/headless/build-alpine.sh
+            mkdir -p /tmp/pkg && cp target/alpine/release/radiomoon-mpx-txd target/alpine/release/radiomoon-mpx-rxd packaging/headless/install.sh /tmp/pkg/
+            apk add --no-cache openrc curl >/dev/null
+            mkdir -p /run/openrc && touch /run/openrc/softlevel
+            RM_PASSWORD=secret-pass-1 sh /tmp/pkg/install.sh both
+            sleep 3
+            rc-status -a || true
+            cat /var/log/radiomoon-mpx/rxd.log || true
+            curl -s -o /dev/null -w "page %{http_code}\n" http://127.0.0.1:8081/
+            curl -s -c /tmp/cj -H "X-RadioMoon: 1" -X POST -d "{\"user\":\"admin\",\"password\":\"secret-pass-1\"}" http://127.0.0.1:8081/api/login | grep -q ok
+            curl -s -b /tmp/cj http://127.0.0.1:8081/api/settings | grep -q "\"proto\""
+            curl -s -c /tmp/cj2 -H "X-RadioMoon: 1" -X POST -d "{\"user\":\"admin\",\"password\":\"secret-pass-1\"}" http://127.0.0.1:8080/api/login | grep -q ok
+            curl -s -b /tmp/cj2 http://127.0.0.1:8080/api/status | head -c 300; echo
+            echo "Alpine install test passed"
+          '

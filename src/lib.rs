@@ -4,7 +4,10 @@ pub mod clock;
 pub mod compact;
 pub mod crypt;
 pub mod demux;
+pub mod events;
+#[cfg(feature = "gui")]
 pub mod host;
+#[cfg(feature = "gui")]
 pub mod look;
 pub mod model;
 pub mod mpx;
@@ -15,8 +18,12 @@ pub mod mpxrx;
 pub mod mpxscope;
 pub mod protect;
 pub mod rdsdec;
+pub mod rxcore;
 pub mod service;
 pub mod sfn;
 pub mod srcin;
 pub mod status;
+#[cfg(feature = "gui")]
 pub mod tray;
+pub mod txcore;
+pub mod web;

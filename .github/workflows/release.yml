@@ -3,6 +3,8 @@
 #   Windows x64/x86/arm64: setup .exe and portable .zip (both programs)
 #   Linux x64/arm64:       transmitter .tar.gz and receiver .tar.gz (arm64 = Raspberry Pi 3/4/5, 64-bit OS)
 #   macOS arm64:           .dmg with both apps
+#   Headless (web interface): Debian / Ubuntu / Raspberry Pi OS and Alpine, x64 / arm64 (names without the version,
+#   so that .../releases/latest/download/<name> always gives the newest)
 name: release
 on:
   push:
@@ -75,9 +77,43 @@ jobs:
           cp target/release/libradiomoon_mpx_clap.so RadioMoon-MPX-Transmitter/RadioMoon-MPX-Transmitter.clap
           tar czf dist/RadioMoon-MPX-Receiver-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Receiver
           tar czf dist/RadioMoon-MPX-Transmitter-$V-linux-${{ matrix.arch }}.tar.gz RadioMoon-MPX-Transmitter
+      - name: Headless edition (web interface; Debian / Ubuntu / Raspberry Pi OS)
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+          D=RadioMoon-MPX-Headless-$V
+          mkdir -p $D
+          cp target/release/radiomoon-mpx-txd target/release/radiomoon-mpx-rxd packaging/headless/install.sh packaging/headless/README.txt CHANGELOG.md $D/
+          tar czf dist/RadioMoon-MPX-Headless-linux-${{ matrix.arch }}.tar.gz $D
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  alpine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: x64 }
+          - { os: ubuntu-22.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build on Alpine (musl)
+        run: docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh packaging/headless/build-alpine.sh
+      - name: Package
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          D=RadioMoon-MPX-Headless-$V
+          mkdir -p dist $D
+          sudo cp target/alpine/release/radiomoon-mpx-txd target/alpine/release/radiomoon-mpx-rxd $D/
+          sudo chown -R $(id -u) $D
+          cp packaging/headless/install.sh packaging/headless/README.txt CHANGELOG.md $D/
+          tar czf dist/RadioMoon-MPX-Headless-alpine-${{ matrix.arch }}.tar.gz $D
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alpine-${{ matrix.arch }}
           path: dist/*
 
   macos:
@@ -118,7 +154,7 @@ jobs:
           path: dist/*
 
   release:
-    needs: [test, windows, linux, macos]
+    needs: [test, windows, linux, alpine, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

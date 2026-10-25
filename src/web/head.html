@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RadioMoon MPX</title>
+<style>
+:root{--bg:#12151c;--panel:#1a1f29;--card:#212734;--inset:#171b24;--border:#2e3646;--text:#e6e9ef;--dim:#8f98aa;--accent:#5aa9ff;--good:#3ecf8e;--warn:#f0b429;--bad:#ef5350}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2}
+header h1{font-size:16px;margin:0 8px 0 0;font-weight:650}
+.pill{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:10px;border:1px solid currentColor}
+.sp{flex:1}
+nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0}
+nav button{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-weight:600;cursor:pointer}
+nav button.on{border-color:var(--accent);color:var(--accent);background:var(--card)}
+main{padding:10px 16px 60px;max-width:1000px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:0 0 12px}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--accent);font-weight:650}
+.grid{display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:6px 12px;align-items:center}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+label.cap{color:var(--dim)}
+input,select{background:var(--inset);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 7px;font:inherit;max-width:100%}
+input[type=text],input[type=password],select{width:min(100%,320px)}
+input[type=number]{width:110px}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);vertical-align:middle}
+button.b{background:var(--accent);color:#08111f;border:0;border-radius:6px;padding:7px 14px;font-weight:700;cursor:pointer}
+button.s{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.hint{color:var(--dim);font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.tile{background:var(--inset);border-radius:6px;padding:7px 10px}
+.tile .k{color:var(--dim);font-size:11px}.tile .v{font-size:20px;font-weight:650}.tile .u{color:var(--dim);font-size:11px;margin-left:3px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+table{border-collapse:collapse;width:100%}td,th{padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--dim);font-weight:600;font-size:12px}
+.row{border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin:0 0 8px;background:var(--inset)}
+.row .grid{grid-template-columns:minmax(100px,150px) 1fr}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 14px;display:none}
+#login{max-width:340px;margin:60px auto}
+.ps{font:600 26px/1.2 ui-monospace,Consolas,monospace;color:var(--good);background:var(--inset);padding:6px 12px;border-radius:6px;display:inline-block;letter-spacing:.08em}
+canvas{width:100%;height:160px;background:var(--inset);border-radius:6px}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.savebar{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);padding:8px 0;margin-top:8px;display:flex;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+<header><h1 id="title">RadioMoon MPX</h1><span id="pills"></span><span class="sp"></span><span class="hint" id="who"></span><button class="s" id="logout" style="display:none">Log out</button></header>
+<div id="login" style="display:none" class="card"><h2>Log in</h2>
+<div class="grid"><label class="cap">User</label><input id="lu" type="text" autocomplete="username" value="admin"><label class="cap">Password</label><input id="lp" type="password" autocomplete="current-password"></div>
+<p><button class="b" id="lb">Log in</button> <span class="hint" id="lerr"></span></p></div>
+<div id="app" style="display:none"><nav id="tabs"></nav><main id="main"></main></div>
+<div id="toast"></div>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const C={good:"#3ecf8e",warn:"#f0b429",bad:"#ef5350",dim:"#8f98aa",accent:"#5aa9ff",text:"#e6e9ef"};
+function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){if(k==="class")e.className=attrs[k];else if(k==="style")e.style.cssText=attrs[k];else if(k.startsWith("on"))e.addEventListener(k.slice(2),attrs[k]);else e.setAttribute(k,attrs[k]);}for(const c of kids.flat()){if(c==null)continue;e.append(c.nodeType?c:document.createTextNode(String(c)));}return e;}
+function esc(s){return String(s==null?"":s);}
+function toast(t,bad){const d=$("#toast");d.textContent=t;d.style.borderColor=bad?C.bad:C.good;d.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>d.style.display="none",3500);}
+async function api(path,body){const o={credentials:"same-origin",headers:{}};if(body!==undefined){o.method="POST";o.headers["Content-Type"]="application/json";o.headers["X-RadioMoon"]="1";o.body=JSON.stringify(body);}
+ const r=await fetch(path,o);let j={};try{j=await r.json();}catch(e){}
+ if(r.status===401&&path!=="/api/login"&&path!=="/api/account"){showLogin();throw new Error("login");}
+ if(!r.ok)throw new Error(j.error||("HTTP "+r.status));return j;}
+function showLogin(){$("#app").style.display="none";$("#logout").style.display="none";$("#login").style.display="block";$("#lp").focus();}
+$("#lb").onclick=async()=>{$("#lerr").textContent="";try{await api("/api/login",{user:$("#lu").value,password:$("#lp").value});$("#lp").value="";boot();}catch(e){$("#lerr").textContent=e.message;}};
+$("#lp").addEventListener("keydown",e=>{if(e.key==="Enter")$("#lb").click();});
+$("#logout").onclick=async()=>{try{await api("/api/logout",{});}catch(e){}showLogin();};
+function get(o,p){return p.split(".").reduce((a,k)=>a==null?undefined:a[k],o);}
+function set(o,p,v){const ks=p.split(".");let a=o;for(let i=0;i<ks.length-1;i++){if(a[ks[i]]==null)a[ks[i]]={};a=a[ks[i]];}a[ks[ks.length-1]]=v;}
+let S=null,DEV={outputs:[],inputs:[],serial:[]},dirty=false;
+/* a form field bound to the settings object S (or another object) */
+function field(f,obj,rerender){
+ const v=get(obj,f.p);let inp;
+ const changed=val=>{set(obj,f.p,val);dirty=true;$("#savebtn")&&($("#savebtn").textContent="Save and apply");if(f.re&&rerender)rerender();};
+ if(f.t==="bool"){inp=el("input",{type:"checkbox"});inp.checked=!!v;inp.onchange=()=>changed(inp.checked);}
+ else if(f.t==="select"){inp=el("select");let opts=typeof f.o==="function"?f.o():f.o;let found=false;
+  for(const [ov,ol] of opts){const o=el("option",{value:JSON.stringify(ov)},ol);if(JSON.stringify(ov)===JSON.stringify(v)){o.selected=true;found=true;}inp.append(o);}
+  if(!found&&v!==undefined){const o=el("option",{value:JSON.stringify(v)},String(v===""?"Default":v));o.selected=true;inp.prepend(o);}
+  inp.onchange=()=>changed(JSON.parse(inp.value));}
+ else if(f.t==="num"){inp=el("input",{type:"number",step:f.step||"any"});if(f.min!=null)inp.min=f.min;if(f.max!=null)inp.max=f.max;inp.value=v==null?"":v;inp.oninput=()=>{const n=parseFloat(inp.value);if(!isNaN(n))changed(f.int?Math.round(n):n);};}
+ else{inp=el("input",{type:f.t==="pw"?"password":"text",placeholder:f.ph||"",autocomplete:"off"});inp.value=v==null?"":v;inp.oninput=()=>changed(inp.value);
+  if(f.t==="pw"){const b=el("button",{class:"s",type:"button",style:"margin-left:6px"},"Show");b.onclick=()=>{inp.type=inp.type==="password"?"text":"password";b.textContent=inp.type==="password"?"Show":"Hide";};const w=el("span",{},inp,b);w.input=inp;return [el("label",{class:"cap"},f.l),el("div",{},w,f.h?el("div",{class:"hint"},f.h):null)];}}
+ if(f.suf)inp=el("span",{},inp," ",el("span",{class:"hint"},f.suf));
+ return [el("label",{class:"cap"},f.l),el("div",{},inp,f.h?el("div",{class:"hint"},f.h):null)];
+}
+function form(fields,obj,rerender){const g=el("div",{class:"grid"});for(const f of fields){if(f.if&&!f.if(obj))continue;g.append(...field(f,obj,rerender));}return g;}
+function card(title,...kids){return el("div",{class:"card"},el("h2",{},title),...kids);}
+function devs(list,def){return ()=>[["",def||"Default"],...list().map(d=>[d,d])];}
+function mbps(v){return v>=10?v.toFixed(1):v>=1?v.toFixed(2):v.toFixed(3);}
+function tile(k,v,u,c){return el("div",{class:"tile"},el("div",{class:"k"},k),el("span",{class:"v",style:c?"color:"+c:""},v),el("span",{class:"u"},u||""));}
+function dot(c){return el("span",{class:"dot",style:"background:"+c});}
+function spectrum(cv,sc){if(!sc||!sc.spec||!sc.spec.length)return;const r=cv.getBoundingClientRect();cv.width=r.width*devicePixelRatio;cv.height=r.height*devicePixelRatio;const g=cv.getContext("2d"),W=cv.width,H=cv.height;g.clearRect(0,0,W,H);
+ g.strokeStyle="#2e3646";g.fillStyle="#8f98aa";g.font=(10*devicePixelRatio)+"px sans-serif";for(const k of [19,38,57,76]){const x=k/96*W;g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke();g.fillText(k+" kHz",x+3,12*devicePixelRatio);}
+ for(const db of [-20,-40,-60]){const y=(-db)/80*H;g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();g.fillText(db+" dB",3,y-2);}
+ g.strokeStyle="#5aa9ff";g.lineWidth=1.5*devicePixelRatio;g.beginPath();sc.spec.forEach((d,i)=>{const x=i/(sc.spec.length-1)*W,y=Math.min(H,Math.max(0,(-d)/80*H));i?g.lineTo(x,y):g.moveTo(x,y);});g.stroke();}
+function kz(v){return (v*75).toFixed(1)+" kHz ("+(v*100).toFixed(1)+"%)";}
+function levels(sc){if(!sc)return null;return el("div",{class:"grid",style:"margin-top:6px"},el("label",{class:"cap"},"Pilot 19 kHz"),el("span",{},kz(sc.pilot)),el("label",{class:"cap"},"RDS 57 kHz"),el("span",{},kz(sc.rds)),el("label",{class:"cap"},"L+R / L-R"),el("span",{},kz(sc.sum)+" / "+kz(sc.diff)),el("label",{class:"cap"},"Deviation peak"),el("span",{style:"color:"+(sc.dev_peak>1.0?C.bad:C.text)},kz(sc.dev_peak)));}
+let TAB=null,TABS=[];
+function tabs(list){TABS=list;const n=$("#tabs");n.innerHTML="";for(const [id,name] of list){const b=el("button",{class:id===TAB?"on":""},name);b.onclick=()=>{TAB=id;tabs(TABS);render();};n.append(b);}}
+async function saveSettings(){try{await api("/api/settings",S);dirty=false;toast("Saved: the settings are applied");render();}catch(e){toast(e.message,true);}}
+function saveBar(){return el("div",{class:"savebar"},el("button",{class:"b",id:"savebtn",onclick:saveSettings},dirty?"Save and apply":"Save"),el("button",{class:"s",onclick:async()=>{S=await api("/api/settings");dirty=false;render();}},"Undo changes"),el("span",{class:"hint"},"Outputs and sources restart when you save; levels and RDS change at once."));}
+function accountCard(){const o={old:"",user:"",password:"",again:""};return card("Login of this page",
+ el("div",{class:"grid"},...field({p:"old",l:"Current password",t:"pw"},o),...field({p:"user",l:"New user name",ph:$("#who").dataset.user||"admin"},o),...field({p:"password",l:"New password",t:"pw",h:"At least 8 characters"},o),...field({p:"again",l:"New password again",t:"pw"},o)),
+ el("p",{},el("button",{class:"b",onclick:async()=>{if(o.password!==o.again){toast("The new passwords are not the same",true);return;}try{await api("/api/account",{old:o.old,user:o.user||$("#who").dataset.user||"admin",password:o.password});toast("Login changed");boot();}catch(e){toast(e.message,true);}}},"Change login")),
+ el("p",{class:"hint"},"The page is plain HTTP: use it on your own network or through a VPN / SSH tunnel, not open to the internet."));}
+let ST=null,timer=null;
+async function poll(){try{ST=await api("/api/status");if(TAB==="status"||TAB==="log")render();pills();}catch(e){}}
+async function boot(){try{const me=await api("/api/me");$("#who").textContent=me.user+" · "+me.version;$("#who").dataset.user=me.user;}catch(e){return;}
+ $("#login").style.display="none";$("#app").style.display="block";$("#logout").style.display="inline-block";
+ S=await api("/api/settings");try{DEV=await api("/api/devices");}catch(e){}
+ if(!TAB)TAB="status";tabs(TABS0);await poll();render();clearInterval(timer);timer=setInterval(poll,1000);}
+</script>
+<script>

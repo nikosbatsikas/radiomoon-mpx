@@ -191,6 +191,8 @@ pub struct RxView {
     pub protect: ProtStats,
     /// Backup source (sound card input) and whether it is on air.
     pub backup: BackupView,
+    /// Event log: stream lost / back, lost packets, refused senders, backup ... (oldest first).
+    pub events: VecDeque<crate::events::Event>,
 }
 
 pub struct RxHandle {
@@ -458,15 +460,28 @@ impl RxHandle {
             let mut samples: Vec<f32> = Vec::with_capacity(8192);
             let mut meter = Meter::new();
             // the numbers for the window (also the backup's state)
-            let tick = |meter: &mut Meter, from: &str, stats: &RxStats| -> bool {
+            let mut tracker = crate::events::Tracker::new();
+            let mut tick = |meter: &mut Meter, from: &str, stats: &RxStats| -> bool {
                 let Ok(a) = air.lock() else { return false };
                 let done = meter.tick(&vw, from, stats, &a.sink, &card, &a.rds);
+                drop(a);
                 if done {
-                    if let (Some(b), Ok(mut v)) = (&bk, vw.lock()) {
-                        v.backup = b.view.lock().map(|g| g.clone()).unwrap_or_default();
+                    if let Ok(mut v) = vw.lock() {
+                        if let Some(b) = &bk {
+                            v.backup = b.view.lock().map(|g| g.clone()).unwrap_or_default();
+                        }
+                        let evs = tracker.observe(&v, crate::status::now_ms());
+                        for e in evs {
+                            crate::events::push(&mut v.events, e);
+                        }
                     }
                 }
                 done
+            };
+            let note = |level: u8, text: String| {
+                if let Ok(mut v) = vw.lock() {
+                    crate::events::push(&mut v.events, crate::events::Event { t: crate::status::now_ms(), level, text });
+                }
             };
             if tcp {
                 let l = match TcpListener::bind(("0.0.0.0", port)) {
@@ -503,6 +518,7 @@ impl RxHandle {
                     let _ = s.set_nonblocking(false);
                     let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
                     let mut buf = vec![0u8; 16384];
+                    note(0, format!("TCP connection from {who}"));
                     let mut de = TcpIn::Unknown(Vec::new()); // a new connection may use another format
                     let mut gate = TcpGate::new();
                     let mut plain: Vec<u8> = Vec::with_capacity(16384);
@@ -555,6 +571,7 @@ impl RxHandle {
                             }
                         }
                     }
+                    note(1, format!("TCP connection from {who} closed"));
                 }
             } else {
                 let sock = match UdpSocket::bind(("0.0.0.0", port)) {

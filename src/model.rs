@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 /// FM multiplex (MPX) generator, its outputs (192 kHz sound card, IP) and the receiver for the transmitter site.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MpxCfg {
     pub autostart: bool,
