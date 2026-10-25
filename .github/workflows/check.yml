@@ -57,7 +57,7 @@ jobs:
           RC=$?; cat glibc.log
           [ $RC -eq 0 ] || { echo "::error title=glibc build::$(grep -v Compiling glibc.log | tail -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"; exit $RC; }
           echo "::notice title=glibc build::needs $(tail -n1 glibc.log)"
-      - name: Run them on AlmaLinux 9 and 10, Debian 11 and Ubuntu 24.04
+      - name: Run them on AlmaLinux 9 and 10, Debian 12, Ubuntu 22.04 and 24.04
         shell: bash
         run: |
           set +e
@@ -74,7 +74,7 @@ jobs:
           echo "--- log"; head -n 3 /tmp/log
           EOF
           FAIL=0
-          for IMG in almalinux:9 almalinux:10 debian:11 ubuntu:24.04; do
+          for IMG in almalinux:9 almalinux:10 debian:12 ubuntu:22.04 ubuntu:24.04; do
             OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b -v "$PWD/runtest.sh":/t.sh "$IMG" bash /t.sh 2>&1)
             echo "== $IMG"; echo "$OUT"
             if echo "$OUT" | grep -q "1.11\|RadioMoon"  && echo "$OUT" | grep -q "200\|Web interface on"; then

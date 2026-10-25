@@ -4,7 +4,7 @@ Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a 
 
 ## 1.11.1
 - **AlmaLinux / Rocky Linux / RHEL / CentOS Stream / Fedora** for the headless editions: the installer uses dnf, opens the web port (and the Receiver's stream port 5004) in firewalld and sets the SELinux labels; then the Transmitter / Receiver runs as a systemd service.
-- The headless Linux packages are now built on AlmaLinux 8 (glibc 2.28), so they also run on AlmaLinux / RHEL 8 and 9, Debian 10 / 11 and Ubuntu 20.04 (1.11.0 needed glibc 2.35). Tested on AlmaLinux 9 and 10, Debian 11 and Ubuntu 24.04.
+- The headless Linux packages are now built on AlmaLinux 8 (glibc 2.28), so they also run on AlmaLinux / RHEL 8 and 9, Debian 10 / 11 and Ubuntu 20.04 (1.11.0 needed glibc 2.35). Tested on AlmaLinux 9 and 10, Debian 12, Ubuntu 22.04 and 24.04.
 - **Alpine fix:** the installer now also installs `libgcc` (the programs did not start on a minimal Alpine: "Error loading shared library libgcc_s.so.1"). The CI test now installs on a clean Alpine.
 - The installer stops with a clear message when the program cannot run on the system.
 - Wiki: AlmaLinux page, QoS on Windows.
