@@ -46,5 +46,8 @@ vi /etc/conf.d/radiomoon-mpx-rxd            # RM_LISTEN="0.0.0.0:8081" (port of 
 ## Diskless (Raspberry Pi, `lbu`)
 `lbu include /usr/local/bin/radiomoon-mpx-rxd /var/lib/radiomoon-mpx` and `lbu commit`.
 
+## CLAP plug-in (radiomoon-server)
+With `transmitter` or `both` the installer also puts the musl plug-in into `/usr/lib/clap`, so radiomoon-server on the same computer can load it; set it up on the Transmitter's web page. See [[CLAP Plug-in]].
+
 ## Firewall (awall / iptables)
 Open the stream port (e.g. UDP 5004) and the web port (8081) for your network.

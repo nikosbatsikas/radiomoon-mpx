@@ -93,17 +93,46 @@ pub use crate::status::modified;
 
 /// Runs the transmitter with the saved settings until `stop`, and writes its live status (for the window and the web
 /// page). Changed settings are applied: levels and RDS at once, the rest with a new start of the chain.
-/// `engine`: "service" | "headless".
+/// While the CLAP plug-in sends with the same settings (its live status is in the same status file), this
+/// transmitter steps aside: it stops its chain, so the MPX does not go out twice, and starts again when the plug-in
+/// stops. `engine`: "service" | "headless".
 pub fn run(stop: Arc<AtomicBool>, engine: &str) {
     let path = cfg_path();
     let st_path = status::path_for(&path);
     let mut s = load();
     let mut key = restart_key(&s);
     let mut stamp = modified(&path);
-    let (mut src, mut m) = start_chain(&s);
+    let mut chain: Option<(SrcHandle, MpxHandle)> = None;
     let mut last_now = String::new();
     let mut checked = Instant::now();
+    let mut announced = false;
     while !stop.load(Ordering::Relaxed) {
+        let plugin = plugin_running(&st_path);
+        if plugin {
+            if let Some((src, m)) = chain.take() {
+                m.stop();
+                src.stop();
+                last_now.clear();
+            }
+            if !announced {
+                eprintln!("The CLAP plug-in sends with these settings: this transmitter waits until it stops.");
+                announced = true;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+        if announced {
+            eprintln!("The CLAP plug-in stopped: this transmitter sends again.");
+            announced = false;
+            // the settings may have changed while the plug-in was sending
+            s = load();
+            key = restart_key(&s);
+            stamp = modified(&path);
+        }
+        if chain.is_none() {
+            chain = Some(start_chain(&s));
+        }
+        let (src, m) = chain.as_mut().expect("started above");
         let now = src.now();
         if !now.is_empty() && now != last_now {
             m.set_radiotext(&s.mpx, &now);
@@ -120,7 +149,9 @@ pub fn run(stop: Arc<AtomicBool>, engine: &str) {
                     m.stop();
                     src.stop();
                     std::thread::sleep(Duration::from_millis(300));
-                    (src, m) = start_chain(&s);
+                    let (a, b) = start_chain(&s);
+                    *src = a;
+                    *m = b;
                     last_now.clear();
                 } else {
                     m.update(&s.mpx);
@@ -142,9 +173,16 @@ pub fn run(stop: Arc<AtomicBool>, engine: &str) {
         status::write(&st_path, &snap);
         std::thread::sleep(Duration::from_millis(250));
     }
-    m.stop();
-    src.stop();
-    status::remove(&st_path);
+    if let Some((src, m)) = chain.take() {
+        m.stop();
+        src.stop();
+        status::remove(&st_path);
+    }
+}
+
+/// True while the CLAP plug-in writes its live status into this status file (not older than `status::FRESH`).
+pub fn plugin_running(st_path: &std::path::Path) -> bool {
+    status::read::<TxStatus>(st_path, |s| s.time_ms).map(|s| s.engine == "plugin").unwrap_or(false)
 }
 
 /// The work of the Windows service / systemd service.

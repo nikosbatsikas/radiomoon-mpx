@@ -27,8 +27,16 @@ pub const PLUGIN_ID: &CStr = c"com.radiomoon.mpx-transmitter";
 
 // ---------------------------------------------------------------- settings
 
-/// The Transmitter's settings file: next to the plug-in file or in the folder above it (the portable zip keeps
-/// the plug-in in its CLAP folder), otherwise in the shared folder the installed Transmitter uses.
+/// Folder of the headless Transmitter (radiomoon-mpx-txd); `RADIOMOON_MPX_DATA` points elsewhere.
+const HEADLESS_DIR: &str = "/var/lib/radiomoon-mpx";
+
+/// The Transmitter's settings file, the first that exists of:
+/// - next to the plug-in file or in the folder above it (the portable zip keeps the plug-in in its CLAP folder);
+/// - the folder in `RADIOMOON_MPX_DATA`;
+/// - on Linux the headless Transmitter's folder (/var/lib/radiomoon-mpx): set up on its web page, e.g. when a
+///   server program such as radiomoon-server hosts the plug-in on a computer without desktop (used when the
+///   headless Transmitter is installed there, i.e. its web login exists);
+/// otherwise the shared folder of the installed Transmitter window.
 fn settings_path(plugin_dir: Option<&Path>) -> PathBuf {
     if let Some(d) = plugin_dir {
         for dir in [Some(d), d.parent()].into_iter().flatten() {
@@ -37,6 +45,13 @@ fn settings_path(plugin_dir: Option<&Path>) -> PathBuf {
                 return p;
             }
         }
+    }
+    if let Some(d) = std::env::var_os("RADIOMOON_MPX_DATA") {
+        return PathBuf::from(d).join("mpx-transmitter.json");
+    }
+    if cfg!(target_os = "linux") && Path::new(HEADLESS_DIR).join("web-login.json").exists() {
+        // the headless Transmitter is installed here (its file comes with the first "Save and apply")
+        return Path::new(HEADLESS_DIR).join("mpx-transmitter.json");
     }
     status::shared_dir().join("mpx-transmitter.json")
 }

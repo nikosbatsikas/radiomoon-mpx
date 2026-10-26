@@ -57,7 +57,7 @@ jobs:
           RC=$?; cat glibc.log
           [ $RC -eq 0 ] || { echo "::error title=glibc build::$(grep -v Compiling glibc.log | tail -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"; exit $RC; }
           echo "::notice title=glibc build::needs $(tail -n1 glibc.log)"
-      - name: Run them on AlmaLinux 9 and 10, Debian 12, Ubuntu 22.04 and 24.04
+      - name: Run them (and load the CLAP plug-in) on AlmaLinux 8, 9 and 10, Debian 12, Ubuntu 22.04 and 24.04
         shell: bash
         run: |
           set +e
@@ -72,12 +72,15 @@ jobs:
           if command -v curl >/dev/null; then curl -s -o /dev/null -w "page %{http_code}\n" http://127.0.0.1:8081/; else
             (exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET / HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3) 2>/dev/null || echo "no curl"; fi
           echo "--- log"; head -n 3 /tmp/log
+          # the CLAP plug-in loads like in a CLAP host (radiomoon-server, REAPER ...)
+          (command -v dnf >/dev/null && dnf install -y -q python3 >/dev/null 2>&1) || apt-get install -y -qq python3 >/dev/null 2>&1
+          python3 /c.py /b/RadioMoon-MPX-Transmitter.clap
           EOF
           FAIL=0
-          for IMG in almalinux:9 almalinux:10 debian:12 ubuntu:22.04 ubuntu:24.04; do
-            OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b -v "$PWD/runtest.sh":/t.sh "$IMG" bash /t.sh 2>&1)
+          for IMG in almalinux:8 almalinux:9 almalinux:10 debian:12 ubuntu:22.04 ubuntu:24.04; do
+            OUT=$(docker run --rm -v "$PWD/target/glibc/release":/b -v "$PWD/runtest.sh":/t.sh -v "$PWD/packaging/headless/clap-load-test.py":/c.py "$IMG" bash /t.sh 2>&1)
             echo "== $IMG"; echo "$OUT"
-            if echo "$OUT" | grep -q "1.11\|RadioMoon"  && echo "$OUT" | grep -q "200\|Web interface on"; then
+            if echo "$OUT" | grep -q "1.11\|RadioMoon"  && echo "$OUT" | grep -q "200\|Web interface on" && echo "$OUT" | grep -q "CLAP load OK"; then
               echo "::notice title=$IMG::$(echo "$OUT" | tr '\n' ' ' | head -c 300)"
             else
               echo "::error title=$IMG::$(echo "$OUT" | tr '\n' ' ' | head -c 600)"; FAIL=1
@@ -91,7 +94,7 @@ jobs:
       - name: Install with the installer (systemd) and check the web interfaces
         shell: bash
         run: |
-          mkdir -p pkg && cp target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd packaging/headless/install.sh pkg/
+          mkdir -p pkg && cp target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd target/glibc/release/RadioMoon-MPX-Transmitter.clap packaging/headless/install.sh pkg/
           sudo RM_PASSWORD=secret-pass-1 sh pkg/install.sh both
           sleep 3
           systemctl --no-pager status radiomoon-mpx-rxd radiomoon-mpx-txd | head -30 || true
@@ -100,6 +103,7 @@ jobs:
           curl -sf -b cj -o rx.json http://127.0.0.1:8081/api/status; head -c 200 rx.json; echo
           curl -sf -c cj2 -H "X-RadioMoon: 1" -X POST -d '{"user":"admin","password":"secret-pass-1"}' http://127.0.0.1:8080/api/login | grep -q ok
           curl -sf -b cj2 -o tx.json http://127.0.0.1:8080/api/status; head -c 200 tx.json; echo
+          test -f /usr/lib/clap/RadioMoon-MPX-Transmitter.clap
           echo "::notice title=systemd install test::$(head -c 300 rx.json)"
           sudo journalctl -u radiomoon-mpx-rxd --no-pager > j.txt || true; tail -5 j.txt
           sudo sh pkg/install.sh uninstall

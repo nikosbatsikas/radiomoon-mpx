@@ -10,6 +10,7 @@ document.title="RadioMoon MPX Transmitter";$("#title").textContent="RadioMoon MP
 const TABS0=[["status","Status"],["source","Audio source"],["ip","IP output"],["card","Sound card output"],["signal","Signal"],["rds","RDS"],["sfn","SFN"],["account","Login"]];
 function pills(){const p=$("#pills");p.innerHTML="";if(!ST){p.append(el("span",{class:"pill",style:"color:"+C.dim},"STOPPED"));return;}
  const ok=(ST.links||[]).some(([t,l])=>l.ok);p.append(el("span",{class:"pill",style:"color:"+(ok||ST.card?C.good:C.warn)},"ON AIR"));
+ if(ST.engine==="plugin")p.append(" ",el("span",{class:"pill",style:"color:"+C.accent},"PLUG-IN"));
  if(S&&S.mpx&&S.mpx.sfn_on&&ST.clock)p.append(" ",el("span",{class:"pill",style:"color:"+(ST.clock.synced?C.good:C.warn)},ST.clock.synced?"SFN CLOCK OK":"SFN CLOCK"));}
 function clockFields(base){return [
  {p:base+".source",l:"Reference clock",t:"select",o:[["system","System clock (ptp4l / chrony)"],["ptp","PTP (IEEE 1588v2), built in"],["gps","GPS receiver (serial port)"]],re:1},
@@ -37,6 +38,7 @@ function targetRow(t,i,re){
 function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
  if(TAB==="status"){
   if(!ST){m.append(card("Status",el("p",{},"The Transmitter is not running.")));return;}
+  if(ST.engine==="plugin")m.append(card("CLAP plug-in",el("p",{},dot(C.accent),"The CLAP plug-in sends the MPX with these settings, with the audio of the program that hosts it (e.g. radiomoon-server). This transmitter waits and sends again when the plug-in stops."),el("div",{class:"hint"},"IP outputs, sound card, signal, RDS and SFN apply to the plug-in; the audio source tab does not.")));
   m.append(card("Transmitter",el("div",{class:"tiles"},tile("Peak",(ST.peak*100).toFixed(0),"%",ST.peak>0.98?C.bad:C.accent),tile("IP outputs",(ST.links||[]).filter(([t,l])=>l.ok).length+" / "+(ST.links||[]).length,"sending"),tile("Total",mbps((ST.links||[]).reduce((a,[t,l])=>a+l.mbps,0)),"Mbit/s",C.accent)),
    el("p",{},dot(C.good),ST.status),el("div",{class:"hint"},"Source: "+ST.source),ST.now?el("div",{},"Now: ",el("b",{},ST.now)):null,ST.card?el("div",{class:"hint"},"Sound card: "+ST.card):null,
    ST.clock?el("div",{class:"hint"},dot(ST.clock.synced?C.good:C.warn),"Clock: "+ST.clock.text):null));

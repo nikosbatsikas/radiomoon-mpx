@@ -11,4 +11,7 @@ fi
 export RUSTFLAGS="-C target-feature=-crt-static"
 export CARGO_TARGET_DIR=target/alpine
 cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
-ls -l target/alpine/release/radiomoon-mpx-txd target/alpine/release/radiomoon-mpx-rxd
+# the CLAP plug-in for audio programs on this C library (e.g. radiomoon-server)
+cargo build --release -p radiomoon_mpx_clap
+cp target/alpine/release/libradiomoon_mpx_clap.so target/alpine/release/RadioMoon-MPX-Transmitter.clap
+ls -l target/alpine/release/radiomoon-mpx-txd target/alpine/release/radiomoon-mpx-rxd target/alpine/release/RadioMoon-MPX-Transmitter.clap

@@ -10,7 +10,7 @@ Download from [Releases](https://github.com/nikosbatsikas/radiomoon-mpx/releases
 | Linux server / Raspberry Pi without desktop | `RadioMoon-MPX-Headless-linux-<arch>.tar.gz` (installer downloads it) | [[Headless and Web Interface]], [[Raspberry Pi]] |
 | Alpine Linux | `RadioMoon-MPX-Headless-alpine-<arch>.tar.gz` (installer downloads it) | [[Alpine Linux]] |
 | AlmaLinux / Rocky / RHEL / Fedora | `RadioMoon-MPX-Headless-linux-<arch>.tar.gz` (installer downloads it) | [[AlmaLinux]] |
-| CLAP plug-in | in the Windows setup, the zip, the Linux transmitter package and the dmg | [[CLAP Plug-in]] |
+| CLAP plug-in | in the Windows setup, the zip, the dmg, the Linux and Alpine packages, and alone: `RadioMoon-MPX-Transmitter-linux-<arch>.clap` / `-alpine-<arch>.clap` | [[CLAP Plug-in]] |
 
 `<arch>`: **x64** = normal PCs (Intel / AMD), **x86** = old 32-bit Windows, **arm64** = Raspberry Pi 3 / 4 / 5 (64-bit system), Windows on ARM, Apple Silicon.
 
