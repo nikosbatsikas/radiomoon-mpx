@@ -81,6 +81,7 @@ if [ "$WHAT" = uninstall ]; then
     else systemctl disable "$n" >/dev/null 2>&1 || true; rm -f "/etc/systemd/system/$n.service"; systemctl daemon-reload; fi
     rm -f "$PREFIX/$n"
   done
+  rm -f /usr/lib/clap/RadioMoon-MPX-Transmitter.clap
   say "Removed the programs and services. Settings and logs are kept in $DATA and $LOGS (delete them by hand if not needed)."
   exit 0
 fi
@@ -149,9 +150,17 @@ for s in $(svc_names); do
   stop_service "$s"
   install -m 755 "$SRC/radiomoon-mpx-$s" "$PREFIX/radiomoon-mpx-$s"
 done
+# the CLAP plug-in (with the Transmitter): where CLAP programs look for plug-ins, e.g. radiomoon-server. It uses the
+# settings of this headless Transmitter; while it sends, the Transmitter service waits.
+CLAPDIR=/usr/lib/clap
+if echo " $(svc_names) " | grep -q " txd " && [ -f "$SRC/RadioMoon-MPX-Transmitter.clap" ]; then
+  mkdir -p "$CLAPDIR"
+  install -m 755 "$SRC/RadioMoon-MPX-Transmitter.clap" "$CLAPDIR/RadioMoon-MPX-Transmitter.clap"
+  say "CLAP plug-in: $CLAPDIR/RadioMoon-MPX-Transmitter.clap"
+fi
 # SELinux (AlmaLinux / RHEL / Fedora): the usual labels for programs and data
 if command -v restorecon >/dev/null 2>&1; then
-  restorecon -R "$PREFIX"/radiomoon-mpx-* "$DATA" "$LOGS" >/dev/null 2>&1 || true
+  restorecon -R "$PREFIX"/radiomoon-mpx-* "$DATA" "$LOGS" /usr/lib/clap >/dev/null 2>&1 || true
 fi
 B1="$PREFIX/radiomoon-mpx-$(svc_names | cut -d' ' -f1)"
 if ! "$B1" --version >/dev/null 2>&1; then

@@ -2,6 +2,12 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.6
+- **CLAP plug-in on Alpine Linux (musl), e.g. in radiomoon-server.** The Linux plug-in was built only for glibc, so a musl program (radiomoon-server on Alpine) could not load it ("cannot be opened on this computer"). Now there is a musl build: in the Alpine package, and alone as `RadioMoon-MPX-Transmitter-alpine-<arch>.clap` (to upload into radiomoon-server).
+- **The glibc plug-in now loads on older systems too** (AlmaLinux / Rocky / RHEL 8 and 9, Debian 10 and 11, Ubuntu 20.04): it is built on AlmaLinux 8 (glibc 2.28) like the headless programs, before it needed glibc 2.34. Also alone as `RadioMoon-MPX-Transmitter-linux-<arch>.clap` and in the headless package.
+- **Plug-in with the headless Transmitter:** the installer puts the plug-in into `/usr/lib/clap` (where CLAP programs look). On a computer with the headless Transmitter the plug-in uses its settings (`/var/lib/radiomoon-mpx`), so it is set up on the Transmitter's web page; or set `RADIOMOON_MPX_DATA` to another folder. While the plug-in sends, the Transmitter service waits (no MPX twice on air) and sends again when the plug-in stops; the web page shows **PLUG-IN** and the plug-in's live status.
+- CI loads the plug-in like a CLAP host on a clean Alpine and on AlmaLinux 8 / 9 / 10, Debian 12 and Ubuntu 22.04 / 24.04.
+
 ## 1.12.5
 - **SFN: smooth time stamps from the Transmitter (big improvement, above all with Compact Opus).** The generator works in bursts (a stream comes in chunks, Opus packets are 20 ms, a busy computer delays it), and the time line of the stamps followed those bursts within seconds: for a while the stamps ran up to a few thousand ppm too fast or too slow, more than any Receiver can follow (the "SFN: Locking ... 300 ppm" and the short unlocks). The time line now follows the clock only slowly (about 60 s) and never faster than 200 ppm. Measured end to end on one computer: Compact Opus now stays locked within 12 µs with a rate trim of a few ppm (before: up to 400 µs and ±200 ppm); L24 within 9 µs.
 - **Output "No sound card (test output)"** now behaves like a card with an exact clock (it reports when each block would be heard), so a busy computer does not disturb SFN tests with it.

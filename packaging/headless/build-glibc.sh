@@ -12,6 +12,11 @@ fi
 . "$HOME/.cargo/env"
 export CARGO_TARGET_DIR=target/glibc
 cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
-ls -l target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd
+# the CLAP plug-in for audio programs on this C library (e.g. radiomoon-server)
+cargo build --release -p radiomoon_mpx_clap
+cp target/glibc/release/libradiomoon_mpx_clap.so target/glibc/release/RadioMoon-MPX-Transmitter.clap
+ls -l target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd target/glibc/release/RadioMoon-MPX-Transmitter.clap
 # the newest glibc symbol the programs need
-objdump -T target/glibc/release/radiomoon-mpx-rxd 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n1 || true
+for f in radiomoon-mpx-rxd RadioMoon-MPX-Transmitter.clap; do
+  echo "$f: $(objdump -T target/glibc/release/$f 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n1)"
+done
