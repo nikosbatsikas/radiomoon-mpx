@@ -73,6 +73,9 @@ struct App {
     /// The AF list while it is being typed: sent only when finished (Enter or leaving the field), so radios
     /// never store a half-typed frequency ("95" while typing "95.7").
     af_edit: Option<String>,
+    /// Opened by the CLAP plug-in (`--plugin`) as its window: no own transmitting, no source / service tabs; the
+    /// value is the host program's name (or empty).
+    plugin_window: Option<String>,
 }
 
 impl App {
@@ -172,8 +175,10 @@ impl App {
                 if ui.button("About").clicked() {
                     self.about = true;
                 }
-                let in_plugin = self.svc.as_ref().map(|s| s.engine == "plugin").unwrap_or(false);
-                if in_plugin {
+                let in_plugin = self.plugin_window.is_some() || self.svc.as_ref().map(|s| s.engine == "plugin").unwrap_or(false);
+                if self.plugin_window.is_some() && live.is_none() {
+                    ui.label(RichText::new("starts when the audio program plays").small().color(look::DIM));
+                } else if in_plugin {
                     // the CLAP plug-in in an audio program does the work: it starts and stops with the program
                     ui.label(RichText::new("runs in the CLAP plug-in").small().color(look::DIM));
                 } else if svc.installed {
@@ -720,7 +725,7 @@ impl eframe::App for App {
         if self.first {
             self.first = false;
             let plugin = status::read::<TxStatus>(&status::path_for(&cfg_path()), |s| s.time_ms).map(|s| s.engine == "plugin").unwrap_or(false);
-            if self.s.mpx.autostart && !svc.installed && !plugin {
+            if self.s.mpx.autostart && !svc.installed && !plugin && self.plugin_window.is_none() {
                 self.start();
             }
         }
@@ -742,7 +747,7 @@ impl eframe::App for App {
             Some(l) => format!("{}{} · {:.2} Mbit/s over IP", if svc.running { "Service · " } else { "" }, if l.status.starts_with("Waiting") { "No audio" } else { "On air" }, l.links.iter().map(|(_, x)| x.mbps).sum::<f32>()),
             None => "Stopped".to_string(),
         };
-        self.host.frame(ctx, self.s.close_to_tray, live.is_some(), &tip);
+        self.host.frame(ctx, self.s.close_to_tray && self.plugin_window.is_none(), live.is_some(), &tip);
         let header_h = egui::TopBottomPanel::top("header")
             .frame(egui::Frame::none().fill(look::CARD).inner_margin(egui::Margin::symmetric(12.0, 6.0)))
             .show(ctx, |ui| {
@@ -778,7 +783,12 @@ impl eframe::App for App {
                 }
                 // ---- tabs
                 ui.horizontal_wrapped(|ui| {
-                    for (t, name) in [(Tab::Source, "Audio source"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Sfn, "SFN"), (Tab::Service, "Service & tray")] {
+                    let tabs: &[(Tab, &str)] = if self.plugin_window.is_some() {
+                        &[(Tab::Source, "Level"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Sfn, "SFN")]
+                    } else {
+                        &[(Tab::Source, "Audio source"), (Tab::Ip, "IP outputs"), (Tab::Card, "Sound card"), (Tab::Signal, "Signal"), (Tab::Rds, "RDS"), (Tab::Sfn, "SFN"), (Tab::Service, "Service & tray")]
+                    };
+                    for &(t, name) in tabs {
                         let on = self.tab == t;
                         let txt = RichText::new(name).strong().color(if on { look::ACCENT } else { look::TEXT });
                         if ui.add(egui::Button::new(txt).fill(if on { look::CARD } else { look::PANEL }).stroke(egui::Stroke::new(1.0_f32, if on { look::ACCENT } else { look::BORDER }))).clicked() {
@@ -790,10 +800,21 @@ impl eframe::App for App {
                 let links: Vec<(IpTarget, LinkStat)> = live.as_ref().map(|l| l.links.clone()).unwrap_or_default();
                 let running = live.is_some();
                 match self.tab {
+                    Tab::Source if self.plugin_window.is_some() => {
+                        let host = self.plugin_window.clone().unwrap_or_default();
+                        card(ui, "Audio from the host program", |ui| {
+                            ui.label(RichText::new(format!("The plug-in takes the audio of its track{}: the audio source of the Transmitter is not used.", if host.is_empty() { String::new() } else { format!(" in {host}") })).color(look::DIM));
+                            ui.horizontal(|ui| {
+                                ui.label("Level");
+                                ch |= ui.add(egui::Slider::new(&mut self.s.gain_db, -24.0..=12.0).suffix(" dB")).changed();
+                            });
+                        });
+                    }
+                    Tab::Service if self.plugin_window.is_some() => {}
                     Tab::Source => restart |= self.source_card(ui),
                     Tab::Ip => restart |= self.ip_card(ui, &links, running),
                     Tab::Card => restart |= self.card_output(ui),
-                    Tab::Signal | Tab::Rds if self.s.kind == "mpx" => {
+                    Tab::Signal | Tab::Rds if self.s.kind == "mpx" && self.plugin_window.is_none() => {
                         card(ui, "", |ui| {
                             ui.label(RichText::new("The source is an MPX input: the composite signal comes ready from the sound card, so these settings are not used.").color(look::WARN));
                         });
@@ -813,7 +834,7 @@ impl eframe::App for App {
                         });
                     }
                 }
-                if self.pending || (restart && svc.running) {
+                if self.plugin_window.is_none() && (self.pending || (restart && svc.running)) {
                     let msg = if svc.running { "Source and output changes are applied when the service is restarted (Service & tray > Restart)." } else { "Source and output changes are applied when you press Stop and Start." };
                     ui.label(RichText::new(msg).color(look::WARN));
                 }
@@ -857,6 +878,14 @@ fn main() -> eframe::Result<()> {
         service::run(&service::TRANSMITTER, service_work);
         return Ok(());
     }
+    // opened by the CLAP plug-in as its window: `--plugin [host name]`
+    let args: Vec<String> = std::env::args().collect();
+    let plugin_window = args.iter().position(|a| a == "--plugin").map(|i| args.get(i + 1).filter(|a| !a.starts_with("--")).cloned().unwrap_or_default());
+    let title = match &plugin_window {
+        Some(h) if !h.is_empty() => format!("RadioMoon MPX Transmitter - plug-in in {h}"),
+        Some(_) => "RadioMoon MPX Transmitter - plug-in".to_string(),
+        None => "RadioMoon MPX Transmitter".to_string(),
+    };
     let s = load();
     let outs: Vec<String> = rodio::cpal::default_host().output_devices().map(|d| d.filter_map(|x| x.name().ok()).collect()).unwrap_or_default();
     let ins = srcin::list_inputs();
@@ -864,7 +893,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([860.0, 720.0])
             .with_min_inner_size([520.0, 400.0])
-            .with_title("RadioMoon MPX Transmitter")
+            .with_title(title.clone())
             .with_icon(std::sync::Arc::new(look::icon(look::TRANSMITTER_ICON))),
         ..Default::default()
     };
@@ -891,6 +920,7 @@ fn main() -> eframe::Result<()> {
                     "rds" => Tab::Rds,
                     "sfn" => Tab::Sfn,
                     "service" => Tab::Service,
+                    _ if plugin_window.is_some() => Tab::Ip,
                     _ => Tab::Source,
                 },
                 host,
@@ -904,6 +934,7 @@ fn main() -> eframe::Result<()> {
                 ports: radiomoon_mpx::clock::serial_ports(),
                 finder: None,
                 af_edit: None,
+                plugin_window,
             }))
         }),
     )

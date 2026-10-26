@@ -4,6 +4,8 @@
 //! receivers / the 192 kHz sound card, with RDS, Compact MPX, SFN and QoS. The Transmitter window shows the
 //! plug-in's live status and is where the settings are changed (level and RDS changes reach the plug-in at once,
 //! the others restart its engine).
+mod gui;
+
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_STEREO};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -167,13 +169,23 @@ struct Plugin {
     /// Interleaved stereo for the engine; the audio thread only uses try_lock and never allocates.
     ring: Arc<Mutex<VecDeque<f32>>>,
     engine: Option<Engine>,
-    plugin_dir: Option<PathBuf>,
+    /// The settings file (chosen when the plug-in is made; the window edits the same file).
+    settings: PathBuf,
+    /// Its window: the Transmitter program in plug-in mode.
+    gui: gui::Gui,
 }
 
 static PLUGIN_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 unsafe fn this<'a>(p: *const clap_plugin) -> &'a mut Plugin {
     &mut *((*p).plugin_data as *mut Plugin)
+}
+
+unsafe fn gui_of(p: *const clap_plugin) -> Option<&'static mut gui::Gui> {
+    if p.is_null() || (*p).plugin_data.is_null() {
+        return None;
+    }
+    Some(&mut this(p).gui)
 }
 
 unsafe extern "C" fn p_init(_p: *const clap_plugin) -> bool {
@@ -190,7 +202,7 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sample_rate: f64, _min: u
     let rate = sample_rate.round() as u32;
     // two seconds of stereo: enough for the engine's 5 ms steps, also when the host renders in bursts
     me.ring = Arc::new(Mutex::new(VecDeque::with_capacity(rate as usize * 4)));
-    me.engine = Some(Engine::start(rate, me.ring.clone(), settings_path(me.plugin_dir.as_deref())));
+    me.engine = Some(Engine::start(rate, me.ring.clone(), me.settings.clone()));
     true
 }
 
@@ -269,13 +281,24 @@ unsafe extern "C" fn ports_get(_p: *const clap_plugin, index: u32, is_input: boo
 static AUDIO_PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports { count: Some(ports_count), get: Some(ports_get) };
 
 unsafe extern "C" fn p_get_extension(_p: *const clap_plugin, id: *const c_char) -> *const c_void {
-    if !id.is_null() && CStr::from_ptr(id) == CLAP_EXT_AUDIO_PORTS {
+    if id.is_null() {
+        return std::ptr::null();
+    }
+    let id = CStr::from_ptr(id);
+    if id == CLAP_EXT_AUDIO_PORTS {
         return &AUDIO_PORTS as *const _ as *const c_void;
+    }
+    if id == clap_sys::ext::gui::CLAP_EXT_GUI {
+        return gui::ext_ptr();
     }
     std::ptr::null()
 }
 
-unsafe extern "C" fn p_on_main_thread(_p: *const clap_plugin) {}
+unsafe extern "C" fn p_on_main_thread(p: *const clap_plugin) {
+    if let Some(g) = gui_of(p) {
+        g.main_thread();
+    }
+}
 
 // ---------------------------------------------------------------- descriptor, factory, entry
 
@@ -313,10 +336,14 @@ unsafe extern "C" fn f_descriptor(_f: *const clap_plugin_factory, index: u32) ->
     }
 }
 
-unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap_host, id: *const c_char) -> *const clap_plugin {
+unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, host: *const clap_host, id: *const c_char) -> *const clap_plugin {
     if id.is_null() || CStr::from_ptr(id) != PLUGIN_ID {
         return std::ptr::null();
     }
+    gui::set_gui_of(gui_of);
+    let plugin_dir = PLUGIN_DIR.lock().ok().and_then(|g| g.clone());
+    let settings = settings_path(plugin_dir.as_deref());
+    let settings_dir = settings.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
     let me = Box::new(Plugin {
         raw: clap_plugin {
             desc: &DESCRIPTOR,
@@ -334,7 +361,8 @@ unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap
         },
         ring: Arc::new(Mutex::new(VecDeque::new())),
         engine: None,
-        plugin_dir: PLUGIN_DIR.lock().ok().and_then(|g| g.clone()),
+        gui: gui::Gui::new(host, settings_dir, plugin_dir),
+        settings,
     });
     let ptr = Box::into_raw(me);
     (*ptr).raw.plugin_data = ptr as *mut c_void;
