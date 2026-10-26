@@ -2,6 +2,11 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.12.7
+- **The CLAP plug-in has a window.** In the audio program (REAPER, Bitwig, Studio One ...) the plug-in's editor button now opens the Transmitter window in plug-in mode: the same tabs as the program — IP outputs, sound card, signal, RDS, SFN, and *Level* of the track's audio — with the plug-in's live status, deviation meter and analyzer. It edits the settings file the plug-in uses, and changes reach the plug-in at once. Closing the window is reported to the audio program. It is a floating window (its own program): safe for the audio program and the same on Windows, macOS and Linux.
+- The window program is found next to the plug-in (Linux package, portable zip), where the setup / dmg installs it (`Program Files\RadioMoon MPX`, `/Applications`), in `~/.local/bin`, `/usr/local/bin` or the PATH, or set `RADIOMOON_MPX_TRANSMITTER`. On a Linux desktop with only the headless Transmitter the window is its web page in the browser.
+- The window in plug-in mode never transmits by itself and has no audio source or service tab.
+
 ## 1.12.6
 - **CLAP plug-in on Alpine Linux (musl), e.g. in radiomoon-server.** The Linux plug-in was built only for glibc, so a musl program (radiomoon-server on Alpine) could not load it ("cannot be opened on this computer"). Now there is a musl build: in the Alpine package, and alone as `RadioMoon-MPX-Transmitter-alpine-<arch>.clap` (to upload into radiomoon-server).
 - **The glibc plug-in now loads on older systems too** (AlmaLinux / Rocky / RHEL 8 and 9, Debian 10 and 11, Ubuntu 20.04): it is built on AlmaLinux 8 (glibc 2.28) like the headless programs, before it needed glibc 2.34. Also alone as `RadioMoon-MPX-Transmitter-linux-<arch>.clap` and in the headless package.

@@ -13,6 +13,21 @@
 
 A plug-in must be built for the same system and C library as the program that loads it: a glibc plug-in does not load in a musl program (Alpine) and the other way round. The headless installer puts the right one into `/usr/lib/clap` when it installs the Transmitter.
 
+## The plug-in's window
+
+Click the plug-in's editor button (REAPER: the *UI* button of the FX window; Bitwig: the window icon of the device; Studio One: the editor button): the **Transmitter window opens in plug-in mode** — title *RadioMoon MPX Transmitter - plug-in in …*, the same look as the program, with the tabs **Level** (of the track's audio), **IP outputs**, **Sound card**, **Signal**, **RDS** and **SFN**, the **PLUG-IN** state, the deviation meter and the analyzer. Changes are saved at once and reach the plug-in (levels and RDS at once; outputs, card and SFN restart its engine). Close it like any window.
+
+The window is the Transmitter program (it opens as a separate, floating window), so the window program must be installed:
+
+| System | The plug-in finds the program |
+|---|---|
+| Windows | setup: `C:\Program Files\RadioMoon MPX\RadioMoon-MPX-Transmitter.exe`; portable zip: one folder above `CLAP` |
+| macOS | `/Applications/RadioMoon MPX Transmitter.app` (from the dmg) |
+| Linux | next to the plug-in, `~/.local/bin`, `/usr/local/bin` or the PATH (`radiomoon-mpx-transmitter`) |
+| any | the file in the environment variable `RADIOMOON_MPX_TRANSMITTER` |
+
+On a Linux desktop that has only the headless Transmitter, the window is its web page (`http://127.0.0.1:8080`) in the browser. On a server without a desktop (e.g. radiomoon-server on Alpine) there is no window: use the Transmitter's web page from another computer.
+
 ## Settings
 
 The plug-in uses the first of:

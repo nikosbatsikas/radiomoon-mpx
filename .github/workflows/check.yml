@@ -13,7 +13,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libxkbcommon-dev libwayland-dev libgtk-3-dev xvfb xdotool imagemagick libxkbcommon-x11-0 libgl1-mesa-dri
       - name: Build and test
         shell: bash
         run: |
@@ -26,7 +26,21 @@ jobs:
           [ -n "$WARN" ] && echo "::warning title=Compiler warnings::$WARN"
           [ $RC -eq 0 ] || exit $RC
           cargo test --release --lib
+          cargo test --release -p radiomoon_mpx_clap --lib
           ls -l target/release/libradiomoon_mpx_clap.so
+      - name: The plug-in's window opens (a CLAP host under Xvfb)
+        shell: bash
+        run: |
+          # like the Linux package: the plug-in next to the Transmitter program
+          mkdir -p guitest && cp target/release/radiomoon-mpx-transmitter guitest/ && cp target/release/libradiomoon_mpx_clap.so guitest/RadioMoon-MPX-Transmitter.clap
+          export XDG_DATA_HOME=$PWD/guitest/data
+          xvfb-run -a -s "-screen 0 1280x900x24" python3 packaging/clap-gui-test.py guitest/RadioMoon-MPX-Transmitter.clap
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clap-gui
+          path: clap-gui.png
+          if-no-files-found: ignore
   windows:
     runs-on: windows-latest
     strategy:
