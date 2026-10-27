@@ -28,6 +28,8 @@ UninstallDisplayIcon={app}\RadioMoon-MPX-Transmitter.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; the license (all rights reserved) must be accepted before installing
+LicenseFile={#SourcePath}..\LICENSE
 DisableProgramGroupPage=yes
 #if Arch == "x64"
 ArchitecturesAllowed=x64compatible
