@@ -18,7 +18,7 @@ $stage = Join-Path $PSScriptRoot "stage\RadioMoon-MPX"
 New-Item -ItemType Directory -Force $stage, "dist" | Out-Null
 Copy-Item "target\$target\release\radiomoon-mpx-transmitter.exe" "$stage\RadioMoon-MPX-Transmitter.exe"
 Copy-Item "target\$target\release\radiomoon-mpx-receiver.exe" "$stage\RadioMoon-MPX-Receiver.exe"
-Copy-Item "README.md", "CHANGELOG.md" $stage
+Copy-Item "README.md", "CHANGELOG.md", "LICENSE" $stage
 # the CLAP plug-in (a DLL with the .clap extension)
 New-Item -ItemType Directory -Force "$stage\CLAP" | Out-Null
 Copy-Item "target\$target\release\radiomoon_mpx_clap.dll" "$stage\CLAP\RadioMoon-MPX-Transmitter.clap"

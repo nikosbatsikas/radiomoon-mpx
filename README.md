@@ -140,6 +140,10 @@ The **tray icon** (Windows and Linux desktops with a tray) is coloured while run
 
 `mpx-transmitter.json` and `mpx-receiver.json` are stored in ProgramData\RadioMoon (Windows) or ~/.local/share/RadioMoon (Linux/macOS), or next to the programs when a `portable.flag` file is there. Enable *Start ... when the program starts* for unattended use.
 
+## License
+
+Copyright (c) 2026 Nikos Batsikas. All rights reserved. See the `LICENSE` file. Third-party libraries keep their own licenses.
+
 ## Building
 
 ```
