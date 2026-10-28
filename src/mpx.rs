@@ -291,7 +291,6 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                 let mbps = (sent as f64 * 8.0 / secs / 1e6) as f32;
                 let l24 = (raw as f64 * 8.0 / secs / 1e6) as f32;
                 let drops = q.drops.load(Ordering::Relaxed);
-                let am_peaks = enc.am_peaks();
                 link_set(&link, |l| {
                     l.mbps = mbps;
                     l.l24_mbps = l24;
@@ -300,10 +299,6 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                     if l.ok {
                         let state = if tcp { "Connected" } else { "Sending" };
                         l.text = if drops == 0 { format!("{state}{pnote}{qos}{qos_note}") } else { format!("{state}{pnote}{qos}{qos_note} (buffer overflows: {drops})") };
-                        // AM: the modulation peaks of the last half second (-100 % = -NEG_FS)
-                        if let Some((neg, pos)) = am_peaks {
-                            l.text += &format!(" · AM peaks {:.0} % / +{:.0} %", neg / crate::am::NEG_FS * 100.0, pos / crate::am::NEG_FS * 100.0);
-                        }
                     }
                 });
                 sent = 0;
@@ -506,6 +501,7 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                 let mbps = (sent as f64 * 8.0 / secs / 1e6) as f32;
                 let l24 = (raw as f64 * 8.0 / secs / 1e6) as f32;
                 let drops = q.drops.load(Ordering::Relaxed);
+                let am_peaks = enc.am_peaks();
                 link_set(&link, |l| {
                     l.mbps = mbps;
                     l.l24_mbps = l24;
@@ -514,6 +510,10 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                     if l.ok {
                         let state = if tcp { "Connected" } else { "Sending" };
                         l.text = if drops == 0 { format!("{state}{pnote}{qos}{qos_note}") } else { format!("{state}{pnote}{qos}{qos_note} (buffer overflows: {drops})") };
+                        // AM: the modulation peaks of the last half second (-100 % = -NEG_FS)
+                        if let Some((neg, pos)) = am_peaks {
+                            l.text += &format!(" · AM peaks {:.0} % / +{:.0} %", neg / crate::am::NEG_FS * 100.0, pos / crate::am::NEG_FS * 100.0);
+                        }
                     }
                 });
                 sent = 0;
