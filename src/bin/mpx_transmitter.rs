@@ -598,6 +598,8 @@ impl App {
                             "flac" => "FLAC lossless",
                             "cflac" => "Compact · FLAC",
                             "copus" => "Compact · Opus",
+                            "amflac" => "AM · FLAC",
+                            "amopus" => "AM · Opus",
                             _ => "PCM uncompressed",
                         };
                         egui::ComboBox::from_id_salt(("codec", i)).width(118.0).selected_text(fmt_name).show_ui(ui, |ui| {
@@ -608,6 +610,15 @@ impl App {
                             ui.label(RichText::new("Compact MPX: audio + RDS, the receiver rebuilds the composite").small().color(look::DIM));
                             restart |= ui.selectable_value(&mut t.codec, "cflac".to_string(), "Compact · FLAC (lossless audio, about 0.9 Mbit/s)").changed();
                             restart |= ui.selectable_value(&mut t.codec, "copus".to_string(), "Compact · Opus (0.15 - 0.35 Mbit/s)").changed();
+                            ui.separator();
+                            ui.label(RichText::new("AM transmitter: mono audio, band-limited, asymmetric limiter (no MPX)").small().color(look::DIM));
+                            restart |= ui.selectable_value(&mut t.codec, "amflac".to_string(), "AM · FLAC (lossless, about 0.3 Mbit/s)").changed();
+                            if ui.selectable_value(&mut t.codec, "amopus".to_string(), "AM · Opus (about 0.1 Mbit/s)").changed() {
+                                restart = true;
+                                if t.opus_kbps > 128 {
+                                    t.opus_kbps = 96;
+                                }
+                            }
                         })
                         .response
                         .on_hover_text("Compact MPX needs the RadioMoon MPX Receiver 1.4.0 or newer");
@@ -617,6 +628,27 @@ impl App {
                                     restart |= ui.selectable_value(&mut t.opus_kbps, k, format!("{k} kbit/s ({note})")).changed();
                                 }
                             });
+                        }
+                        if t.is_am() {
+                            if t.codec == "amopus" {
+                                egui::ComboBox::from_id_salt(("amkbps", i)).width(96.0).selected_text(format!("{} kbit/s", t.opus_kbps)).show_ui(ui, |ui| {
+                                    for (k, note) in [(128u32, "best"), (96, "transparent for AM, recommended"), (64, "weak links")] {
+                                        restart |= ui.selectable_value(&mut t.opus_kbps, k, format!("{k} kbit/s ({note})")).changed();
+                                    }
+                                });
+                            }
+                            egui::ComboBox::from_id_salt(("ambw", i)).width(96.0).selected_text(format!("{:.1} kHz", t.am_bw_hz as f32 / 1000.0)).show_ui(ui, |ui| {
+                                for (hz, name) in radiomoon_mpx::am::BANDWIDTHS {
+                                    restart |= ui.selectable_value(&mut t.am_bw_hz, hz, name).changed();
+                                }
+                            })
+                            .response
+                            .on_hover_text("Audio bandwidth of the AM channel: 4.5 kHz for 9 kHz channel spacing (Europe, Africa, Asia), 10 kHz (NRSC) for 10 kHz spacing (America)");
+                            ui.label(RichText::new("+peak").small().color(look::DIM));
+                            restart |= ui
+                                .add(egui::DragValue::new(&mut t.am_pos_peak).range(100.0..=150.0).speed(1.0).suffix(" %"))
+                                .on_hover_text("Positive peak limit (usually +125 %). Negative peaks are always held at -100 % (no carrier cut-off).")
+                                .changed();
                         } else if !t.is_compact() {
                             let est = |codec: &str, bits: u32| -> f32 {
                                 // typical bandwidth incl. headers; FLAC depends on the audio

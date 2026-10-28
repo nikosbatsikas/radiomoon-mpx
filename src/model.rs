@@ -134,6 +134,7 @@ pub struct IpTarget {
     pub proto: String,
     /// The composite: "l24" = uncompressed PCM, "flac" = lossless FLAC.
     /// Compact MPX (the audio, rebuilt into the composite by the receiver): "cflac" = FLAC, "copus" = Opus.
+    /// AM audio for an AM transmitter (mono, band-limited, asymmetric limiter; see am.rs): "amflac", "amopus".
     pub codec: String,
     /// Bits per sample: 24 (full quality), 20 or 16 (less bandwidth). The sample rate is always 192 kHz.
     pub bits: u32,
@@ -147,11 +148,15 @@ pub struct IpTarget {
     pub fec: u8,
     /// Protection (UDP): burst protection, up to this many packets lost in a row are restored (1 = off).
     pub fec_burst: u8,
+    /// AM: audio bandwidth, Hz (4500, 5000, 9000, 10000).
+    pub am_bw_hz: u32,
+    /// AM: positive peak limit, % modulation (100 - 150).
+    pub am_pos_peak: f32,
 }
 
 impl Default for IpTarget {
     fn default() -> Self {
-        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46, opus_kbps: 256, password: String::new(), fec: 0, fec_burst: 1 }
+        IpTarget { enabled: true, name: String::new(), host: "127.0.0.1".into(), port: 5004, proto: "udp".into(), codec: "flac".into(), bits: 24, dscp: 46, opus_kbps: 256, password: String::new(), fec: 0, fec_burst: 1, am_bw_hz: 4500, am_pos_peak: 125.0 }
     }
 }
 
@@ -179,7 +184,11 @@ impl IpTarget {
     }
     /// Compact MPX (audio + levels + RDS) instead of the composite waveform.
     pub fn is_compact(&self) -> bool {
-        self.codec == "cflac" || self.codec == "copus"
+        matches!(self.codec.as_str(), "cflac" | "copus" | "amflac" | "amopus")
+    }
+    /// AM audio (for an AM transmitter) instead of the FM multiplex.
+    pub fn is_am(&self) -> bool {
+        self.codec == "amflac" || self.codec == "amopus"
     }
     pub fn kind(&self) -> String {
         let mut k = self.kind_format();
@@ -197,8 +206,8 @@ impl IpTarget {
     /// Duration of one UDP packet of this format, ms.
     pub fn packet_ms(&self) -> f32 {
         match self.codec.as_str() {
-            "copus" => 20.0,
-            "cflac" => 6.667,
+            "copus" | "amopus" => 20.0,
+            "cflac" | "amflac" => 6.667,
             "flac" => 2.0,
             _ => 1.25,
         }
@@ -213,7 +222,11 @@ impl IpTarget {
     }
     fn kind_format(&self) -> String {
         let p = if self.proto == "tcp" { "TCP" } else { "UDP" };
-        if self.codec == "copus" {
+        if self.codec == "amopus" {
+            format!("{p} · AM audio Opus {} · {:.1} kHz", self.opus_kbps, self.am_bw_hz as f32 / 1000.0)
+        } else if self.codec == "amflac" {
+            format!("{p} · AM audio FLAC · {:.1} kHz", self.am_bw_hz as f32 / 1000.0)
+        } else if self.codec == "copus" {
             format!("{p} · Compact Opus {}", self.opus_kbps)
         } else if self.codec == "cflac" {
             format!("{p} · Compact FLAC")

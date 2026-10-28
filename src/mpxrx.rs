@@ -300,6 +300,8 @@ pub fn format_name(st: &RxStats) -> String {
     match st.compact {
         1 => "Compact MPX (FLAC)".into(),
         2 => "Compact MPX (Opus)".into(),
+        3 => "AM audio (FLAC)".into(),
+        4 => "AM audio (Opus)".into(),
         _ if st.flac => format!("FLAC {bits}-bit"),
         _ => format!("L{bits}"),
     }

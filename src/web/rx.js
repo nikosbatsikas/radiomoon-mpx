@@ -9,7 +9,7 @@ const ABOUT={name:"RadioMoon MPX Receiver",tagline:"Receives the MPX over IP and
  "Headless with this web interface (Linux, Raspberry Pi, Alpine), or with its window, as a service"]};
 document.title="RadioMoon MPX Receiver";$("#title").textContent="RadioMoon MPX Receiver";
 const TABS0=[["status","Status"],["log","Log"],["input","Input & protection"],["output","Output"],["sfn","SFN"],["backup","Backup"],["account","Login"]];
-function fmtName(st){const b=st.bits||24;if(st.compact===1)return "Compact MPX (FLAC)";if(st.compact===2)return "Compact MPX (Opus)";return st.flac?"FLAC "+b+"-bit":"L"+b;}
+function fmtName(st){const b=st.bits||24;if(st.compact===1)return "Compact MPX (FLAC)";if(st.compact===2)return "Compact MPX (Opus)";if(st.compact===3)return "AM audio (FLAC)";if(st.compact===4)return "AM audio (Opus)";return st.flac?"FLAC "+b+"-bit":"L"+b;}
 function pills(){const p=$("#pills");p.innerHTML="";if(!ST||!ST.view){p.append(el("span",{class:"pill",style:"color:"+C.dim},"STOPPED"));return;}
  const v=ST.view;const add=(t,c)=>p.append(el("span",{class:"pill",style:"color:"+c+";margin-right:6px"},t));
  add(v.receiving?"RECEIVING":"NO SIGNAL",v.receiving?C.good:C.warn);

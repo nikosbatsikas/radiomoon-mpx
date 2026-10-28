@@ -20,14 +20,17 @@ function clockFields(base){return [
  {p:base+".gps_baud",l:"Baud rate",t:"select",o:[4800,9600,19200,38400,57600,115200].map(b=>[b,String(b)]),if:o=>get(o,base+".source")==="gps"},
  {p:base+".gps_pps",l:"PPS on the DCD line",t:"bool",re:1,if:o=>get(o,base+".source")==="gps"},
  {p:base+".gps_delay_ms",l:"NMEA delay",t:"num",suf:"ms",if:o=>get(o,base+".source")==="gps"&&!get(o,base+".gps_pps")}];}
-const CODECS=[["flac","FLAC lossless (composite)"],["l24","PCM uncompressed (composite)"],["cflac","Compact MPX · FLAC (about 0.9 Mbit/s)"],["copus","Compact MPX · Opus (0.15 - 0.35 Mbit/s)"]];
-function newTarget(){const last=S.mpx.targets[S.mpx.targets.length-1]||{};return {enabled:true,name:"Receiver "+(S.mpx.targets.length+1),host:"",port:last.port||5004,proto:last.proto||"udp",codec:last.codec||"flac",bits:24,dscp:46,opus_kbps:256,password:"",fec:0,fec_burst:1};}
+const CODECS=[["flac","FLAC lossless (composite)"],["l24","PCM uncompressed (composite)"],["cflac","Compact MPX · FLAC (about 0.9 Mbit/s)"],["copus","Compact MPX · Opus (0.15 - 0.35 Mbit/s)"],["amflac","AM transmitter · FLAC (mono audio, about 0.3 Mbit/s)"],["amopus","AM transmitter · Opus (mono audio, about 0.1 Mbit/s)"]];
+function newTarget(){const last=S.mpx.targets[S.mpx.targets.length-1]||{};return {enabled:true,name:"Receiver "+(S.mpx.targets.length+1),host:"",port:last.port||5004,proto:last.proto||"udp",codec:last.codec||"flac",bits:24,dscp:46,opus_kbps:256,password:"",fec:0,fec_burst:1,am_bw_hz:4500,am_pos_peak:125};}
 function targetRow(t,i,re){
  const live=((ST&&ST.links)||[]).find(([lt])=>lt.host===t.host&&lt.port===t.port&&lt.proto===t.proto&&lt.codec===t.codec);
  const f=[{p:"enabled",l:"Send",t:"bool"},{p:"name",l:"Name",ph:"site"},{p:"host",l:"Address",ph:"IP or host name"},{p:"port",l:"Port",t:"num",int:1,min:1,max:65535},
   {p:"proto",l:"Protocol",t:"select",o:[["udp","UDP (RTP)"],["tcp","TCP"]],re:1},{p:"codec",l:"Format",t:"select",o:CODECS,re:1},
   {p:"bits",l:"Bits",t:"select",o:[[24,"24-bit"],[20,"20-bit"],[16,"16-bit"]],if:o=>o.codec==="flac"||o.codec==="l24"},
   {p:"opus_kbps",l:"Opus bit rate",t:"select",o:[[320,"320 kbit/s"],[256,"256 kbit/s (recommended)"],[192,"192 kbit/s"],[128,"128 kbit/s"]],if:o=>o.codec==="copus"},
+  {p:"opus_kbps",l:"Opus bit rate",t:"select",o:[[128,"128 kbit/s"],[96,"96 kbit/s (recommended for AM)"],[64,"64 kbit/s"]],if:o=>o.codec==="amopus"},
+  {p:"am_bw_hz",l:"AM bandwidth",t:"select",o:[[4500,"4.5 kHz (9 kHz channels: Europe, Africa, Asia)"],[5000,"5 kHz"],[9000,"9 kHz"],[10000,"10 kHz (NRSC, America)"]],if:o=>o.codec==="amflac"||o.codec==="amopus"},
+  {p:"am_pos_peak",l:"AM positive peak",t:"num",min:100,max:150,suf:"% (negative peaks always held at -100 %)",if:o=>o.codec==="amflac"||o.codec==="amopus"},
   {p:"dscp",l:"QoS (DSCP)",t:"select",o:[[46,"EF (46), recommended"],[34,"AF41 (34)"],[40,"CS5 (40)"],[48,"CS6 (48)"],[0,"Off"]]},
   {p:"password",l:"Password",t:"pw",h:"Encrypts the stream; the receiver needs the same password. Empty: not encrypted."},
   {p:"fec",l:"FEC",t:"select",o:[[0,"Off"],[20,"1 per 20 packets (+5%)"],[10,"1 per 10 packets (+10%)"],[5,"1 per 5 packets (+20%)"]],re:1,if:o=>o.proto!=="tcp"},
