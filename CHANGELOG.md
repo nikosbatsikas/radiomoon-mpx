@@ -8,6 +8,7 @@ Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a 
 - Accuracy: half the difference between the two directions of the path: some tens of µs on a LAN, often 0.1 - 2 ms over WiFi or the internet. For an SFN overlap of a few µs GPS with PPS at every site is still the way.
 - The Transmitter shows each Receiver's clock with its IP output (*Time: the Receiver follows this clock* or *the Receiver's clock +159.2 ms*), in the window and on the web page.
 - Needs 1.13.0 at both ends. Older Receivers do not answer; the Transmitter then asks only every 30 s.
+- **No compiler warnings** in any build (Windows x64 / x86 / arm64, Linux, headless, Alpine): unused imports in both window programs and two unused fields of the SFN playout removed. The check builds now list every warning of every system, so new ones are seen at once.
 
 ## 1.12.7
 - **The CLAP plug-in has a window.** In the audio program (REAPER, Bitwig, Studio One ...) the plug-in's editor button now opens the Transmitter window in plug-in mode: the same tabs as the program — IP outputs, sound card, signal, RDS, SFN, and *Level* of the track's audio — with the plug-in's live status, deviation meter and analyzer. It edits the settings file the plug-in uses, and changes reach the plug-in at once. Closing the window is reported to the audio program. It is a floating window (its own program): safe for the audio program and the same on Windows, macOS and Linux.
