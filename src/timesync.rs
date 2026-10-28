@@ -52,7 +52,7 @@ fn seal(mut v: Vec<u8>, key: Option<&[u8; 32]>) -> Vec<u8> {
 }
 
 /// The packet without its HMAC, if it is authentic for `key` (no key: only packets without HMAC).
-fn open(d: &[u8], base_len: usize, key: Option<&[u8; 32]>) -> Option<&[u8]> {
+fn open<'a>(d: &'a [u8], base_len: usize, key: Option<&[u8; 32]>) -> Option<&'a [u8]> {
     match key {
         None => (d.len() == base_len).then_some(d),
         Some(k) => {
