@@ -11,9 +11,9 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 . "$HOME/.cargo/env"
 export CARGO_TARGET_DIR=target/glibc
-cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd
+cargo build --release --no-default-features --bin radiomoon-mpx-txd --bin radiomoon-mpx-rxd --message-format=short
 # the CLAP plug-in for audio programs on this C library (e.g. radiomoon-server)
-cargo build --release -p radiomoon_mpx_clap
+cargo build --release -p radiomoon_mpx_clap --message-format=short
 cp target/glibc/release/libradiomoon_mpx_clap.so target/glibc/release/RadioMoon-MPX-Transmitter.clap
 ls -l target/glibc/release/radiomoon-mpx-txd target/glibc/release/radiomoon-mpx-rxd target/glibc/release/RadioMoon-MPX-Transmitter.clap
 # the newest glibc symbol the programs need
