@@ -24,6 +24,7 @@ pub mod sfn;
 pub mod srcin;
 pub mod status;
 #[cfg(feature = "gui")]
+pub mod timesync;
 pub mod tray;
 pub mod txcore;
 pub mod web;

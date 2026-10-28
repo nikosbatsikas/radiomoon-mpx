@@ -11,6 +11,17 @@ Several transmitters on the same frequency must put the same sample on air at th
 
 **Reference clocks:** *System clock* (best when the computer is synchronised by PTP — ptp4l + phc2sys — or GPS PPS with gpsd + chrony), the built-in *PTP* client (IEEE 1588v2 default profile, ports 319 / 320, about ±10–100 µs), or a *GPS receiver* on a serial port (NMEA; with PPS on DCD about ±0.1–1 ms).
 
+**Receiver: *Transmitter's clock*** (from 1.13.0) — no NTP, PTP or GPS needed. The Transmitter sends a small time packet to each Receiver once a second on the same UDP path as the stream, and the Receiver answers; the Receiver then plays by the Transmitter's clock. All sites follow one clock, so computers whose clocks differ by many ms (the warning *the Transmitter's clock is about … ms ahead*) play together. It works through NAT, needs no extra port and is protected by the stream password. Accuracy: half the difference between the two directions of the path — some tens of µs on a LAN, often 0.1 – 2 ms over WiFi or the internet. The Transmitter shows for each IP output *Time: the Receiver follows this clock (round trip … ms)*.
+
+| Reference clock | Typical accuracy between sites | Needs |
+|---|---|---|
+| Transmitter's clock (Receiver) | LAN: tens of µs; WiFi / internet: 0.1 – 2 ms | nothing (1.13.0 at both ends) |
+| System clock with NTP | 1 – 20 ms | a time service at every site |
+| PTP, built in | ±10 – 100 µs | a PTP grandmaster in the network |
+| GPS with PPS (system clock via gpsd + chrony) | ~1 µs | a GPS receiver at every site |
+
+For a real SFN overlap area (a few µs) use GPS with PPS at every site; the Transmitter's clock is the easy choice for links where ms are enough, or to start.
+
 UDP only. For WiFi / internet links see [[WiFi and Internet Links]].
 
 ![Receiver SFN tab](images/screens/receiver-sfn.png)

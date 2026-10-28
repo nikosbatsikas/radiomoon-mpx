@@ -179,18 +179,25 @@ impl Host {
 // ---------------------------------------------------------------- SFN reference clock settings (both programs)
 
 /// Settings of the SFN reference clock, with its live state. Returns true when something was changed.
-pub fn clock_ui(ui: &mut egui::Ui, c: &mut crate::clock::ClockCfg, state: Option<&crate::clock::ClockState>, ports: &[String]) -> bool {
+/// `receiver`: also offer the Transmitter's clock (over the stream link).
+pub fn clock_ui(ui: &mut egui::Ui, c: &mut crate::clock::ClockCfg, state: Option<&crate::clock::ClockState>, ports: &[String], receiver: bool) -> bool {
     let mut ch = false;
     card(ui, "Reference clock", |ui| {
         ui.horizontal_wrapped(|ui| {
             ch |= ui.selectable_value(&mut c.source, "system".to_string(), "System clock").changed();
             ch |= ui.selectable_value(&mut c.source, "ptp".to_string(), "PTP (IEEE 1588v2)").changed();
             ch |= ui.selectable_value(&mut c.source, "gps".to_string(), "GPS receiver").changed();
+            if receiver {
+                ch |= ui.selectable_value(&mut c.source, "transmitter".to_string(), "Transmitter's clock").changed();
+            }
         });
         let dim = |ui: &mut egui::Ui, t: &str| {
             ui.label(RichText::new(t).small().color(look::DIM));
         };
         match c.source.as_str() {
+            "transmitter" => {
+                dim(ui, "The Transmitter's clock, measured over the stream link: the Transmitter sends a small time packet once a second on the same UDP path as the stream and this Receiver answers (like NTP, but straight to the Transmitter; works through NAT, protected by the stream password). No NTP, PTP or GPS needed: all Receivers follow the same clock. Accuracy: half the difference between the two directions of the path — some tens of µs on a LAN, often 0.1 - 2 ms over WiFi or the internet. Needs SFN time stamps on in the Transmitter, UDP, and version 1.13 or newer at both ends. For an SFN overlap of a few µs use GPS with PPS at every site.");
+            }
             "ptp" => {
                 egui::Grid::new("ptp").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
                     ui.label(RichText::new("Domain").color(look::DIM));

@@ -2,6 +2,13 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.13.0
+- **SFN without NTP, PTP or GPS: the Receiver can follow the Transmitter's clock.** New reference clock in the Receiver: *Transmitter's clock*. The Transmitter sends a small time packet to each UDP receiver once a second, on the same socket and path as the stream; the Receiver answers at once. From the four time stamps the Receiver knows the Transmitter's clock (like NTP, but straight to the Transmitter and over the stream's own link). Only the answers with the shortest round trip are used (not held up in a queue), and a straight line through them follows the drift of the two clocks. All sites then follow one clock, so the "Transmitter's clock is ... ms ahead" difference of unsynchronised computers is gone.
+- Works through NAT (the Transmitter starts every exchange, the Receiver answers to where it came from), needs no extra port, and with a stream password both directions are authenticated (HMAC), so nobody can shift a site's time.
+- Accuracy: half the difference between the two directions of the path: some tens of µs on a LAN, often 0.1 - 2 ms over WiFi or the internet. For an SFN overlap of a few µs GPS with PPS at every site is still the way.
+- The Transmitter shows each Receiver's clock with its IP output (*Time: the Receiver follows this clock* or *the Receiver's clock +159.2 ms*), in the window and on the web page.
+- Needs 1.13.0 at both ends. Older Receivers do not answer; the Transmitter then asks only every 30 s.
+
 ## 1.12.7
 - **The CLAP plug-in has a window.** In the audio program (REAPER, Bitwig, Studio One ...) the plug-in's editor button now opens the Transmitter window in plug-in mode: the same tabs as the program — IP outputs, sound card, signal, RDS, SFN, and *Level* of the track's audio — with the plug-in's live status, deviation meter and analyzer. It edits the settings file the plug-in uses, and changes reach the plug-in at once. Closing the window is reported to the audio program. It is a floating window (its own program): safe for the audio program and the same on Windows, macOS and Linux.
 - The window program is found next to the plug-in (Linux package, portable zip), where the setup / dmg installs it (`Program Files\RadioMoon MPX`, `/Applications`), in `~/.local/bin`, `/usr/local/bin` or the PATH, or set `RADIOMOON_MPX_TRANSMITTER`. On a Linux desktop with only the headless Transmitter the window is its web page in the browser.

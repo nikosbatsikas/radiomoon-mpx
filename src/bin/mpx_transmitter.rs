@@ -534,7 +534,7 @@ impl App {
             );
         });
         if self.s.mpx.sfn_on {
-            restart |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.mpx.clock, clock.as_ref(), &self.ports);
+            restart |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.mpx.clock, clock.as_ref(), &self.ports, false);
             if ui.small_button("Refresh the list of serial ports").clicked() {
                 self.ports = radiomoon_mpx::clock::serial_ports();
             }
@@ -687,6 +687,9 @@ impl App {
                     if let Some(l) = live {
                         let saving = if t.codec != "l24" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
+                        if !l.time.is_empty() {
+                            ui.label(RichText::new(&l.time).small().color(if l.time.contains("follows") { look::GOOD } else { look::DIM }));
+                        }
                         look::sparkline(ui, &l.hist, 32.0, look::ACCENT);
                     } else if running && t.enabled && ip_on {
                         ui.label(RichText::new("Changed: applied when you press Stop and Start").small().color(look::WARN));

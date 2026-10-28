@@ -42,7 +42,7 @@ function render(){const m=$("#main");m.innerHTML="";const re=()=>render();
   m.append(card("Transmitter",el("div",{class:"tiles"},tile("Peak",(ST.peak*100).toFixed(0),"%",ST.peak>0.98?C.bad:C.accent),tile("IP outputs",(ST.links||[]).filter(([t,l])=>l.ok).length+" / "+(ST.links||[]).length,"sending"),tile("Total",mbps((ST.links||[]).reduce((a,[t,l])=>a+l.mbps,0)),"Mbit/s",C.accent)),
    el("p",{},dot(C.good),ST.status),el("div",{class:"hint"},"Source: "+ST.source),ST.now?el("div",{},"Now: ",el("b",{},ST.now)):null,ST.card?el("div",{class:"hint"},"Sound card: "+ST.card):null,
    ST.clock?el("div",{class:"hint"},dot(ST.clock.synced?C.good:C.warn),"Clock: "+ST.clock.text):null));
-  const tb=el("tbody");for(const [t,l] of ST.links||[])tb.append(el("tr",{},el("td",{},dot(l.ok?C.good:C.bad),t.name||t.host),el("td",{class:"hint"},t.host+":"+t.port),el("td",{style:"white-space:nowrap"},mbps(l.mbps)+" Mbit/s"),el("td",{class:"hint"},l.text)));
+  const tb=el("tbody");for(const [t,l] of ST.links||[])tb.append(el("tr",{},el("td",{},dot(l.ok?C.good:C.bad),t.name||t.host),el("td",{class:"hint"},t.host+":"+t.port),el("td",{style:"white-space:nowrap"},mbps(l.mbps)+" Mbit/s"),el("td",{class:"hint"},l.text,l.time?el("div",{style:"color:"+(l.time.includes("follows")?C.good:C.dim)},l.time):null)));
   if((ST.links||[]).length)m.append(card("IP outputs",el("table",{},el("thead",{},el("tr",{},el("th",{},"Receiver"),el("th",{},"Address"),el("th",{},"Bandwidth"),el("th",{},"State"))),tb)));
   const cv=el("canvas");m.append(card("Signal",cv,levels(ST.scope)));requestAnimationFrame(()=>spectrum(cv,ST.scope));
  }

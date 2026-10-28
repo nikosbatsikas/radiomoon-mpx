@@ -546,7 +546,7 @@ impl App {
             }
         });
         if self.s.sfn_on {
-            ch |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.clock, clock.as_ref(), &self.ports);
+            ch |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.clock, clock.as_ref(), &self.ports, true);
             if ui.small_button("Refresh the list of serial ports").clicked() {
                 self.ports = radiomoon_mpx::clock::serial_ports();
             }

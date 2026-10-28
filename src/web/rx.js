@@ -17,7 +17,7 @@ function pills(){const p=$("#pills");p.innerHTML="";if(!ST||!ST.view){p.append(e
  if(v.receiving&&v.protect&&v.protect.encrypted)add("ENCRYPTED",C.good);
  if(v.sfn)add(v.sfn.locked?"SFN LOCKED":"SFN",v.sfn.locked?C.good:C.warn);}
 function clockFields(base){return [
- {p:base+".source",l:"Reference clock",t:"select",o:[["system","System clock (ptp4l / chrony)"],["ptp","PTP (IEEE 1588v2), built in"],["gps","GPS receiver (serial port)"]],re:1},
+ {p:base+".source",l:"Reference clock",t:"select",o:[["system","System clock (ptp4l / chrony)"],["ptp","PTP (IEEE 1588v2), built in"],["gps","GPS receiver (serial port)"],["transmitter","Transmitter's clock (over the stream link)"]],re:1,h:"Transmitter's clock: measured over the stream link (a time packet once a second, answered by this Receiver), no NTP / PTP / GPS needed; about ±0.1 - 2 ms over WiFi / internet, tens of µs on a LAN; needs 1.13 or newer at both ends."}},
  {p:base+".ptp_domain",l:"PTP domain",t:"num",int:1,min:0,max:127,if:o=>get(o,base+".source")==="ptp"},
  {p:base+".ptp_iface",l:"Interface address",ph:"default",if:o=>get(o,base+".source")==="ptp"},
  {p:base+".gps_port",l:"Serial port",t:"select",o:()=>[["","Choose ..."],...DEV.serial.map(s=>[s,s])],if:o=>get(o,base+".source")==="gps"},
