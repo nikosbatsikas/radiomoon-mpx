@@ -23,6 +23,7 @@ FEC delay = n × burst × 20 ms (Opus packet): 1/5 × 2 = **200 ms**, 1/5 × 4 =
 |---|---|
 | Input → Protection → Password | the same password |
 | SFN delay (all sites the **same**) | **1500 - 2000 ms** to start with |
+| SFN → Reference clock | **Transmitter's clock** (no NTP needed), or GPS with PPS for µs accuracy |
 | Without SFN: Output → Buffer | 500 - 1000 ms |
 
 ![Delay budget](images/delay.png)

@@ -2,7 +2,8 @@
 //!   - the system clock (best when the computer is synchronised by PTP, e.g. ptp4l + phc2sys / Windows PTP, or by
 //!     GPS with PPS, e.g. gpsd + chrony),
 //!   - a built-in IEEE 1588v2 (PTP) client: default profile, multicast, end-to-end delay, UDP ports 319 / 320,
-//!   - a GPS receiver on a serial port: NMEA time ($xxRMC / $xxZDA), optionally PPS on the DCD line.
+//!   - a GPS receiver on a serial port: NMEA time ($xxRMC / $xxZDA), optionally PPS on the DCD line,
+//!   - (Receiver) the Transmitter's clock, measured over the stream link (see `timesync`).
 //! The clock is the system clock plus an offset that the source keeps up to date. After the first lock the offset
 //! changes slowly (slewed), so the time never jumps during playout.
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ClockCfg {
-    /// "system" | "ptp" | "gps"
+    /// "system" | "ptp" | "gps" | "transmitter" (Receiver: the Transmitter's clock, over the stream link)
     pub source: String,
     pub ptp_domain: u8,
     /// Address of the network interface for PTP (empty = the default interface).
@@ -71,8 +72,13 @@ impl RefClock {
     pub fn start(cfg: &ClockCfg) -> Arc<RefClock> {
         let sh = Arc::new(Shared { state: Mutex::new(ClockState::default()), offset: Mutex::new((0.0, 0.0, Instant::now())), locked_once: AtomicBool::new(false) });
         let stop = Arc::new(AtomicBool::new(false));
-        let system = !matches!(cfg.source.as_str(), "ptp" | "gps");
-        if system {
+        let system = !matches!(cfg.source.as_str(), "ptp" | "gps" | "transmitter");
+        if cfg.source == "transmitter" {
+            // fed by the stream's time packets (timesync::Responder)
+            if let Ok(mut s) = sh.state.lock() {
+                *s = ClockState { synced: false, offset_us: 0.0, jitter_us: 0.0, text: "Transmitter's clock: waiting for its time packets (UDP, SFN time stamps on, version 1.13 or newer) ...".into() };
+            }
+        } else if system {
             sh.locked_once.store(true, Ordering::Relaxed);
             if let Ok(mut s) = sh.state.lock() {
                 *s = ClockState { synced: true, offset_us: 0.0, jitter_us: 0.0, text: "System clock (keep it synchronised with PTP, GPS or NTP)".into() };
@@ -102,6 +108,18 @@ impl RefClock {
             g.0
         };
         Some(system_ns() + off as i128)
+    }
+
+    /// Source "transmitter": a new estimate of the Transmitter's clock minus this computer's system clock (ns), its
+    /// spread (ns) and the shortest round trip (ns), from `timesync`.
+    pub fn feed_transmitter(&self, offset_ns: f64, spread_ns: f64, min_rtt_ns: f64, from: &str) {
+        set_offset(&self.sh, offset_ns);
+        set_state(&self.sh, |s| {
+            s.synced = true;
+            s.offset_us = offset_ns / 1000.0;
+            s.jitter_us = spread_ns / 1000.0;
+            s.text = format!("Transmitter's clock ({from}): {:+.2} ms from this computer's clock, round trip {:.1} ms, ±{:.0} µs", offset_ns / 1e6, min_rtt_ns / 1e6, spread_ns / 1000.0);
+        });
     }
 
     pub fn state(&self) -> ClockState {

@@ -413,9 +413,15 @@ impl RxHandle {
         let peak = Arc::new(AtomicU32::new(0));
         let view = Arc::new(Mutex::new(RxView::default()));
         let card: Text = Arc::new(Mutex::new(String::new()));
+        // SFN with the Transmitter's clock: the stream's time packets feed it
+        let mut time_clock: Option<Arc<RefClock>> = None;
         let q = match (&cfg.sfn, cfg.proto == "tcp") {
             (Some((sc, cc)), false) => {
-                let pl = SfnPlayout::new(sc.clone(), RefClock::start(cc));
+                let rc = RefClock::start(cc);
+                if cc.source == "transmitter" {
+                    time_clock = Some(rc.clone());
+                }
+                let pl = SfnPlayout::new(sc.clone(), rc);
                 sfn_card_thread(cfg.device.clone(), pl.clone(), stop.clone(), card.clone(), "Sound card");
                 Sink::Sfn(pl)
             }
@@ -459,6 +465,8 @@ impl RxHandle {
             // the key is made from the password once (it takes some milliseconds)
             let mut unprot = Unprotector::new(&password);
             let key = (!password.is_empty()).then(|| crate::crypt::stream_key(&password));
+            // answers the Transmitter's time packets (and feeds the "transmitter" reference clock)
+            let mut responder = crate::timesync::Responder::new(&password, time_clock);
             let mut samples: Vec<f32> = Vec::with_capacity(8192);
             let mut meter = Meter::new();
             // the numbers for the window (also the backup's state)
@@ -593,7 +601,17 @@ impl RxHandle {
                 let mut accepted = false;
                 set(&stt, &format!("Waiting for packets on UDP port {port} ..."));
                 while !st.load(Ordering::Relaxed) {
-                    if let Ok((n, a)) = sock.recv_from(&mut buf) {
+                    let got = sock.recv_from(&mut buf).ok().filter(|&(n, a)| {
+                        // SFN time from the Transmitter: answered at once, not part of the stream
+                        if crate::timesync::is_time_packet(&buf[..n]) {
+                            if allow.allows(a.ip()) {
+                                responder.packet(&buf[..n], a, &sock);
+                            }
+                            return false;
+                        }
+                        true
+                    });
+                    if let Some((n, a)) = got {
                         let d = &buf[..n];
                         inner.clear();
                         let protected = Unprotector::is_protected(d);

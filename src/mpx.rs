@@ -46,6 +46,8 @@ pub struct LinkStat {
     pub text: String,
     /// Bandwidth history (oldest first).
     pub hist: std::collections::VecDeque<f32>,
+    /// SFN: the Receiver's clock, measured over this link (empty without SFN or before it answers).
+    pub time: String,
 }
 
 pub type Link = Arc<Mutex<LinkStat>>;
@@ -77,6 +79,20 @@ fn set_dscp(sock: socket2::SockRef<'_>, dscp: u8) -> String {
         Ok(()) => String::new(),
         Err(e) => format!(" (QoS not set: {e})"),
     }
+}
+
+/// SFN: the time exchange with one Receiver (see `timesync`); its result is shown with the link.
+fn start_time_sync(sock: &UdpSocket, tl: &Arc<Timeline>, password: &str, stop: &Arc<AtomicBool>, link: &Link) {
+    let out = Arc::new(Mutex::new(crate::timesync::PeerTime::default()));
+    crate::timesync::prober(sock, tl.clock().clone(), password, stop.clone(), out.clone());
+    let (link, stop) = (link.clone(), stop.clone());
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(500));
+            let text = out.lock().map(|g| g.text()).unwrap_or_default();
+            link_set(&link, |l| l.time = text);
+        }
+    });
 }
 
 fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: Option<Arc<Timeline>>) {
@@ -175,6 +191,10 @@ fn ip_thread(t: IpTarget, q: Arc<Queue>, stop: Arc<AtomicBool>, link: Link, tl: 
                 match UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect(&addr).map(|_| s)) {
                     Ok(s) => {
                         qos_note = set_dscp(socket2::SockRef::from(&s), t.dscp);
+                        // SFN: exchange the time with the Receiver on this socket (it can follow this clock)
+                        if let Some(tl) = &tl {
+                            start_time_sync(&s, tl, &t.password, &stop, &link);
+                        }
                         udp = Some(s);
                         link_set(&link, |l| {
                             l.ok = true;
@@ -388,6 +408,10 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                 match UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect(&addr).map(|_| s)) {
                     Ok(s) => {
                         qos_note = set_dscp(socket2::SockRef::from(&s), t.dscp);
+                        // SFN: exchange the time with the Receiver on this socket (it can follow this clock)
+                        if let Some(tl) = &tl {
+                            start_time_sync(&s, tl, &t.password, &stop, &link);
+                        }
                         udp = Some(s);
                         link_set(&link, |l| {
                             l.ok = true;

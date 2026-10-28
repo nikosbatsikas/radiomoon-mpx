@@ -7,17 +7,13 @@
 use eframe::egui::{self, RichText};
 use radiomoon_mpx::host::Host;
 use radiomoon_mpx::look::{self, card, inset, pill, Tile};
-use radiomoon_mpx::model::{IpTarget, MpxCfg};
+use radiomoon_mpx::model::IpTarget;
 use radiomoon_mpx::mpx::{LinkStat, MpxHandle};
 use radiomoon_mpx::mpxscope::{self, Scope};
 use radiomoon_mpx::service;
-use radiomoon_mpx::srcin::{self, Aes67Cfg, Aes67Finder, SrcCfg, SrcHandle};
+use radiomoon_mpx::srcin::{self, Aes67Finder, SrcHandle};
 use radiomoon_mpx::status::{self, TxStatus};
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -534,7 +530,7 @@ impl App {
             );
         });
         if self.s.mpx.sfn_on {
-            restart |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.mpx.clock, clock.as_ref(), &self.ports);
+            restart |= radiomoon_mpx::host::clock_ui(ui, &mut self.s.mpx.clock, clock.as_ref(), &self.ports, false);
             if ui.small_button("Refresh the list of serial ports").clicked() {
                 self.ports = radiomoon_mpx::clock::serial_ports();
             }
@@ -687,6 +683,9 @@ impl App {
                     if let Some(l) = live {
                         let saving = if t.codec != "l24" && l.l24_mbps > 0.0 { format!(" · {:.0}% of L24", l.mbps / l.l24_mbps * 100.0) } else { String::new() };
                         ui.label(RichText::new(format!("{}{saving} · sent {:.1} MB", l.text, l.total_mb)).small().color(if l.ok { look::DIM } else { look::BAD }));
+                        if !l.time.is_empty() {
+                            ui.label(RichText::new(&l.time).small().color(if l.time.contains("follows") { look::GOOD } else { look::DIM }));
+                        }
                         look::sparkline(ui, &l.hist, 32.0, look::ACCENT);
                     } else if running && t.enabled && ip_on {
                         ui.label(RichText::new("Changed: applied when you press Stop and Start").small().color(look::WARN));

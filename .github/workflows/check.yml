@@ -56,7 +56,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p radiomoon-mpx -p radiomoon_mpx_clap
+        shell: pwsh
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p radiomoon-mpx -p radiomoon_mpx_clap --message-format=short 2>&1 | Tee-Object -FilePath build.log
+          $rc = $LASTEXITCODE
+          $w = Select-String -Path build.log -Pattern ': warning' | ForEach-Object { $_.Line }
+          if ($w) { Write-Output ("::warning title=Compiler warnings (${{ matrix.target }})::" + (($w | Select-Object -First 80) -join '%0A')) }
+          exit $rc
 
   headless-linux:
     runs-on: ubuntu-22.04
@@ -70,6 +76,8 @@ jobs:
           docker run --rm -v "$PWD":/src -w /src almalinux:8 sh packaging/headless/build-glibc.sh > glibc.log 2>&1
           RC=$?; cat glibc.log
           [ $RC -eq 0 ] || { echo "::error title=glibc build::$(grep -v Compiling glibc.log | tail -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"; exit $RC; }
+          W=$(grep -E ': warning' glibc.log | sort -u | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          [ -n "$W" ] && echo "::warning title=Compiler warnings (headless, AlmaLinux 8)::$W" || true
           echo "::notice title=glibc build::needs $(tail -n1 glibc.log)"
       - name: Run them (and load the CLAP plug-in) on AlmaLinux 8, 9 and 10, Debian 12, Ubuntu 22.04 and 24.04
         shell: bash
@@ -135,6 +143,8 @@ jobs:
           # the install test in a fresh container: no compiler or build libraries, like a new Alpine installation
           [ $RC -eq 0 ] && { docker run --rm -v "$PWD":/src:ro -w /src alpine:3.20 sh packaging/headless/ci-alpine-test.sh >> alpine.log 2>&1; RC=$?; }
           cat alpine.log
+          W=$(grep -E ': warning' alpine.log | sort -u | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          [ -n "$W" ] && echo "::warning title=Compiler warnings (Alpine)::$W" || true
           if [ $RC -ne 0 ]; then
             T=$(grep -v "^\s*Compiling\|^\s*Downloaded\|^\s*Downloading" alpine.log | tail -70 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
             echo "::error title=Alpine build / install test::$T"

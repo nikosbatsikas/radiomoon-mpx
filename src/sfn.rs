@@ -183,9 +183,6 @@ struct Buf {
     margin_since: std::time::Instant,
     /// Blocks since the last (re)start.
     settle: u32,
-    /// (unused, kept for the layout)
-    dll: Option<(i128, f64, f64)>,
-    dll_age: u32,
     /// Spread of the timing error around its average (the callback jitter), samples².
     dll_jitter: f64,
     /// The shown (averaged) error, samples, and rate.
@@ -214,7 +211,7 @@ impl SfnPlayout {
         Arc::new(SfnPlayout {
             cfg,
             clock,
-            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0, dll: None, dll_age: 0, dll_jitter: 0.0, err_show: 0.0, rate_show: 0.0, far: 0, mono: None, off_blocks: 0 }),
+            b: Mutex::new(Buf { data: VecDeque::with_capacity(cap), base: 0, anchors: VecDeque::new(), pos: None, ratio_adj: 0.0, integ: 0.0, err_f: 0.0, min_margin: f64::MAX, margin_since: std::time::Instant::now(), settle: 0, dll_jitter: 0.0, err_show: 0.0, rate_show: 0.0, far: 0, mono: None, off_blocks: 0 }),
             interp: Interp::new(),
             status: Mutex::new(SfnStatus { active: true, state: "Waiting for time stamps".into(), ..SfnStatus::default() }),
             cap,
