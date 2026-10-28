@@ -935,7 +935,7 @@ pub struct RxStats {
     pub flac: bool,
     /// Bits per sample of the stream (16, 20 or 24).
     pub bits: u32,
-    /// Compact MPX: 0 = no (the composite itself), 1 = FLAC audio, 2 = Opus audio.
+    /// Compact MPX: 0 = no (the composite itself), 1 = FLAC audio, 2 = Opus audio; AM audio: 3 = FLAC, 4 = Opus.
     pub compact: u8,
 }
 

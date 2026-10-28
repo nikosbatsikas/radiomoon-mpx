@@ -325,8 +325,15 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
     std::thread::spawn(move || {
         let addr = t.address();
         let tcp = t.proto == "tcp";
-        let codec = if t.codec == "copus" { compact::Codec::Opus } else { compact::Codec::Flac };
-        let mut enc = match compact::Encoder::new(codec, t.opus_kbps) {
+        let codec = if t.codec == "copus" || t.codec == "amopus" { compact::Codec::Opus } else { compact::Codec::Flac };
+        // AM mode: the AM audio (mono, band-limited, asymmetric limiter) instead of the audio for a composite
+        let made = if t.is_am() {
+            let pre = params.lock().map(|g| g.0.preemph_us).unwrap_or(50.0);
+            compact::Encoder::new_am(codec, t.opus_kbps, crate::am::AmCfg { bandwidth_hz: t.am_bw_hz as f32, pos_peak: t.am_pos_peak, fm_preemph_us: pre })
+        } else {
+            compact::Encoder::new(codec, t.opus_kbps)
+        };
+        let mut enc = match made {
             Ok(e) => e,
             Err(e) => {
                 link_set(&link, |l| l.text = format!("Codec error: {e}"));
@@ -494,6 +501,7 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                 let mbps = (sent as f64 * 8.0 / secs / 1e6) as f32;
                 let l24 = (raw as f64 * 8.0 / secs / 1e6) as f32;
                 let drops = q.drops.load(Ordering::Relaxed);
+                let am_peaks = enc.am_peaks();
                 link_set(&link, |l| {
                     l.mbps = mbps;
                     l.l24_mbps = l24;
@@ -502,6 +510,10 @@ fn compact_thread(t: IpTarget, q: Arc<Queue>, params: Arc<Mutex<(MpxParams, RdsD
                     if l.ok {
                         let state = if tcp { "Connected" } else { "Sending" };
                         l.text = if drops == 0 { format!("{state}{pnote}{qos}{qos_note}") } else { format!("{state}{pnote}{qos}{qos_note} (buffer overflows: {drops})") };
+                        // AM: the modulation peaks of the last half second (-100 % = -NEG_FS)
+                        if let Some((neg, pos)) = am_peaks {
+                            l.text += &format!(" · AM peaks {:.0} % / +{:.0} %", neg / crate::am::NEG_FS * 100.0, pos / crate::am::NEG_FS * 100.0);
+                        }
                     }
                 });
                 sent = 0;

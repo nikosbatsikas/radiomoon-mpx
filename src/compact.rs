@@ -6,11 +6,13 @@
 //! Packet (after the RTP header, payload type 101; over TCP: "RMC1", then 16-bit length + packet):
 //!   0      version (1)
 //!   1      codec: 0 = FLAC 16-bit stereo, 1 = Opus stereo
-//!   2      flags: bit 0 stereo, bit 1 RDS on, bit 2 RDS block follows
+//!   2      flags: bit 0 stereo, bit 1 RDS on, bit 2 RDS block follows, bit 3 AM (the audio itself goes on air:
+//!          processed mono AM audio, no composite; version 1.14)
 //!   3      RDS version (changes when the RDS texts change)
 //!   4..12  audio, pilot, RDS and output level, 16-bit each (x 10000)
 //!   [16-bit length, RDS block]  when flag bit 2
 //!   16-bit length, audio frame (FLAC frame or Opus packet)
+use crate::am::{AmCfg, AmProcessor};
 use crate::mpxdsp::{Composer, Interpolator, MpxParams, RdsData};
 use crate::mpxflac::{decode_frame, encode_frame_stereo, Quantizer, RxStats};
 
@@ -126,9 +128,27 @@ pub struct Encoder {
     count: u32,
     last_rds: Vec<u8>,
     rds_seq: u8,
+    /// AM mode: the audio is made into AM audio (mono, band-limited, asymmetric limiter) and goes on air as it is.
+    am: Option<AmProcessor>,
 }
 
 impl Encoder {
+    /// AM mode (see am.rs): sends the AM audio instead of the audio for a composite.
+    pub fn new_am(codec: Codec, kbps: u32, cfg: AmCfg) -> Result<Encoder, String> {
+        let mut e = Encoder::new(codec, kbps)?;
+        e.am = Some(AmProcessor::new(cfg, RATE));
+        Ok(e)
+    }
+
+    /// AM mode: the program's peaks of the last call (negative, positive), full scale (-100 % = -am::NEG_FS).
+    pub fn am_peaks(&mut self) -> Option<(f32, f32)> {
+        let a = self.am.as_mut()?;
+        let p = (a.peak_neg, a.peak_pos);
+        a.peak_neg = 0.0;
+        a.peak_pos = 0.0;
+        Some(p)
+    }
+
     /// `kbps`: Opus bit rate (ignored for FLAC).
     pub fn new(codec: Codec, kbps: u32) -> Result<Encoder, String> {
         let opus = match codec {
@@ -142,7 +162,7 @@ impl Encoder {
             }
             Codec::Flac => None,
         };
-        Ok(Encoder { codec, opus, quant: Quantizer::new(16), l: Vec::new(), r: Vec::new(), phase: 0, frame_no: 0, count: 0, last_rds: Vec::new(), rds_seq: 0 })
+        Ok(Encoder { codec, opus, quant: Quantizer::new(16), l: Vec::new(), r: Vec::new(), phase: 0, frame_no: 0, count: 0, last_rds: Vec::new(), rds_seq: 0, am: None })
     }
 
     /// Takes processed stereo audio at 192 kHz (interleaved L R) and appends finished packets to `out`.
@@ -151,8 +171,17 @@ impl Encoder {
         let frame = self.codec.frame();
         for p in lr.chunks_exact(2) {
             if self.phase == 0 {
-                self.l.push(p[0]);
-                self.r.push(p[1]);
+                match self.am.as_mut() {
+                    Some(a) => {
+                        let y = a.push(p[0], p[1]);
+                        self.l.push(y);
+                        self.r.push(y);
+                    }
+                    None => {
+                        self.l.push(p[0]);
+                        self.r.push(p[1]);
+                    }
+                }
             }
             self.phase = (self.phase + 1) % FACTOR;
             if self.l.len() == frame {
@@ -198,7 +227,8 @@ impl Encoder {
         let mut p = Vec::with_capacity(audio.len() + block.len() + 20);
         p.push(VERSION);
         p.push(if self.codec == Codec::Opus { 1 } else { 0 });
-        p.push((params.stereo as u8) | (rds.enabled as u8) << 1 | (with_rds as u8) << 2);
+        let am = self.am.is_some();
+        p.push(((params.stereo && !am) as u8) | ((rds.enabled && !am) as u8) << 1 | (with_rds as u8) << 2 | (am as u8) << 3);
         p.push(self.rds_seq);
         for v in [params.audio_level, params.pilot_level, params.rds_level, params.output] {
             p.extend_from_slice(&level(v));
@@ -223,6 +253,8 @@ pub struct Decoder {
     comp: Composer,
     rds_seq: Option<u8>,
     pub codec: Option<Codec>,
+    /// The stream is AM audio (played as it is, no composite).
+    pub am: bool,
     ol: Vec<f32>,
     or: Vec<f32>,
 }
@@ -244,6 +276,7 @@ impl Decoder {
             comp: Composer::new(192_000, MpxParams::default(), rds),
             rds_seq: None,
             codec: None,
+            am: false,
             ol: Vec::new(),
             or: Vec::new(),
         }
@@ -257,8 +290,13 @@ impl Decoder {
             self.up_l.push(a, &mut self.ol);
             self.up_r.push(b, &mut self.or);
             for k in 0..FACTOR {
-                // the codec may overshoot a little: keep the audio inside the limiter's range
-                out.push(self.comp.push(self.ol[k].clamp(-1.0, 1.0), self.or[k].clamp(-1.0, 1.0)));
+                if self.am {
+                    // AM audio: on air as it is; the codec may overshoot a little, keep it inside the AM limits
+                    out.push(((self.ol[k] + self.or[k]) * 0.5).clamp(-crate::am::NEG_FS, 1.0));
+                } else {
+                    // the codec may overshoot a little: keep the audio inside the limiter's range
+                    out.push(self.comp.push(self.ol[k].clamp(-1.0, 1.0), self.or[k].clamp(-1.0, 1.0)));
+                }
             }
         }
     }
@@ -271,6 +309,7 @@ impl Decoder {
         let codec = if p[1] == 1 { Codec::Opus } else { Codec::Flac };
         let flags = p[2];
         let seq = p[3];
+        self.am = flags & 8 != 0;
         self.comp.params = MpxParams {
             stereo: flags & 1 != 0,
             audio_level: unlevel(&p[4..6]),
@@ -358,6 +397,16 @@ impl Decoder {
 
 // ================================================================ packets (UDP / RTP and TCP)
 
+/// `RxStats::compact` of a stream: 1 FLAC, 2 Opus (Compact MPX), 3 FLAC, 4 Opus (AM audio).
+pub fn compact_kind(c: Codec, am: bool) -> u8 {
+    match (c, am) {
+        (Codec::Flac, false) => 1,
+        (Codec::Opus, false) => 2,
+        (Codec::Flac, true) => 3,
+        (Codec::Opus, true) => 4,
+    }
+}
+
 /// Handles Compact MPX RTP packets: order, losses (concealed), late packets.
 pub struct CompactRx {
     pub dec: Decoder,
@@ -387,10 +436,7 @@ impl CompactRx {
     fn note(&mut self, c: Codec) {
         self.stats.flac = false;
         self.stats.bits = 16;
-        self.stats.compact = match c {
-            Codec::Flac => 1,
-            Codec::Opus => 2,
-        };
+        self.stats.compact = compact_kind(c, self.dec.am);
     }
 
     pub fn packet(&mut self, pkt: &[u8], out: &mut Vec<f32>) -> bool {
@@ -480,7 +526,7 @@ impl CompactTcp {
                 Some(c) => {
                     self.stats.flac = false;
                     self.stats.bits = 16;
-                    self.stats.compact = if c == Codec::Opus { 2 } else { 1 };
+                    self.stats.compact = compact_kind(c, self.dec.am);
                     self.stats.packets += 1;
                 }
                 None => self.stats.bad += 1,
@@ -542,6 +588,55 @@ mod tests {
         let (mbps, n) = roundtrip(Codec::Opus);
         eprintln!("Compact Opus 256: {mbps:.2} Mbit/s, {n} samples");
         assert!(mbps < 0.3 && n > 300_000);
+    }
+
+    #[test]
+    fn am_audio_roundtrip() {
+        // loud music through the FM processing, then the AM output: mono AM audio arrives, within the AM limits,
+        // no pilot (the 19 kHz band stays empty) and the stream is reported as AM audio
+        for codec in [Codec::Flac, Codec::Opus] {
+            let params = MpxParams::default();
+            let rds = RdsData { enabled: true, ..RdsData::default() };
+            let mut gen = MpxEncoder::new(44_100, 192_000, params.clone(), rds.clone());
+            gen.tap = Some(Vec::new());
+            let mut enc = Encoder::new_am(codec, 96, AmCfg::default()).unwrap();
+            let mut rx = CompactRx::new();
+            let input: Vec<f32> = music(44_100 * 2).iter().map(|v| v * 3.0).collect();
+            let (mut mpx, mut out, mut pkts) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut seq, mut ts) = (0u16, 0u32);
+            for ch in input.chunks(882) {
+                gen.process(ch, &mut mpx);
+                let tap = std::mem::take(gen.tap.as_mut().unwrap());
+                enc.push(&tap, &params, &rds, &mut pkts);
+                for p in pkts.drain(..) {
+                    let mut pkt = vec![0x80, PT_COMPACT];
+                    pkt.extend_from_slice(&seq.to_be_bytes());
+                    pkt.extend_from_slice(&ts.to_be_bytes());
+                    pkt.extend_from_slice(&1u32.to_be_bytes());
+                    pkt.extend_from_slice(&p);
+                    seq = seq.wrapping_add(1);
+                    ts = ts.wrapping_add(codec.frame_192() as u32);
+                    assert!(rx.packet(&pkt, &mut out));
+                }
+            }
+            assert_eq!(rx.stats.compact, compact_kind(codec, true));
+            assert!(rx.dec.am);
+            let tail = &out[out.len() / 2..];
+            let lo = tail.iter().fold(0f32, |m, v| m.min(*v));
+            let hi = tail.iter().fold(0f32, |m, v| m.max(*v));
+            assert!(lo >= -crate::am::NEG_FS - 1e-6 && hi <= 1.0, "{codec:?}: {lo} .. {hi}");
+            assert!(hi > 0.5, "{codec:?}: the audio is there ({hi})");
+            // the 19 kHz pilot of FM must not be in the AM audio: correlate with 19 kHz
+            let (mut c, mut s19) = (0f64, 0f64);
+            for (i, v) in tail.iter().enumerate() {
+                let w = 2.0 * std::f64::consts::PI * 19_000.0 * i as f64 / 192_000.0;
+                c += *v as f64 * w.cos();
+                s19 += *v as f64 * w.sin();
+            }
+            let amp = 2.0 * (c * c + s19 * s19).sqrt() / tail.len() as f64;
+            assert!(amp < 1e-3, "{codec:?}: 19 kHz {amp}");
+            eprintln!("AM {codec:?}: {lo:.3} .. {hi:.3}");
+        }
     }
 
     #[test]

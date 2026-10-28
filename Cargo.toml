@@ -1,6 +1,6 @@
 [package]
 name = "radiomoon-mpx"
-version = "1.13.0"
+version = "1.14.0"
 edition = "2021"
 description = "RadioMoon MPX - FM multiplex transmitter and receiver (stereo, RDS, L24 / lossless FLAC over IP)"
 license = "LicenseRef-RadioMoon"

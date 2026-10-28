@@ -2,6 +2,12 @@
 
 Versions follow MAJOR.MINOR.PATCH. The version lives in `Cargo.toml`. Pushing a new version to `main` creates the tag and the release automatically.
 
+## 1.14.0
+- **AM mode: feed AM (medium wave, long wave, short wave) transmitters.** New formats for an IP output: *AM · FLAC* (lossless, about 0.3 Mbit/s) and *AM · Opus* (64 - 128 kbit/s, about 0.1 Mbit/s). Instead of the FM multiplex the Transmitter sends the audio an AM exciter needs: mono, the FM pre-emphasis taken out, a 50 Hz high-pass (no DC on the carrier), a steep low-pass at the channel's bandwidth (4.5 kHz for 9 kHz channels in Europe / Africa / Asia, 5 kHz, 9 kHz, or 10 kHz NRSC for America) and an asymmetric limiter: negative peaks never below -100 % (no carrier cut-off, no splatter), positive peaks up to the set limit (+125 % usual). The output shows the modulation peaks of the program.
+- The Receiver plays the AM audio on its sound card for the exciter's audio input (-100 % = -0.8 of full scale, +125 % = full scale; set the exciter's input level once). Everything of the IP link works as for FM: UDP / TCP, FEC, encryption, allowed senders, backup source, log, and SFN — synchronous AM with the *Transmitter's clock* is easy, as AM needs far less timing accuracy than FM.
+- One Transmitter can feed FM sites (MPX) and AM sites (AM audio) at the same time: every IP output has its own format.
+- Needs 1.14.0 at the Receiver (older Receivers would rebuild an FM composite from it).
+
 ## 1.13.0
 - **SFN without NTP, PTP or GPS: the Receiver can follow the Transmitter's clock.** New reference clock in the Receiver: *Transmitter's clock*. The Transmitter sends a small time packet to each UDP receiver once a second, on the same socket and path as the stream; the Receiver answers at once. From the four time stamps the Receiver knows the Transmitter's clock (like NTP, but straight to the Transmitter and over the stream's own link). Only the answers with the shortest round trip are used (not held up in a queue), and a straight line through them follows the drift of the two clocks. All sites then follow one clock, so the "Transmitter's clock is ... ms ahead" difference of unsynchronised computers is gone.
 - Works through NAT (the Transmitter starts every exchange, the Receiver answers to where it came from), needs no extra port, and with a stream password both directions are authenticated (HMAC), so nobody can shift a site's time.

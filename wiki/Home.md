@@ -19,6 +19,6 @@ Two programs for FM broadcasting over IP:
 2. **[[First Steps]]** – the first link Transmitter → Receiver in 10 minutes.
 3. **The programs** – [[Transmitter]] · [[Receiver]] · [[Web Interface]] · [[CLAP Plug-in]]
 4. **Links and networks** – [[IP Transport and Formats]] · [[WiFi and Internet Links]] · [[Protection]] (encryption, FEC, allowed senders) · [[SFN]]
-5. **More** – [[RDS]] · [[Backup Source]] · [[Receiver Log]] · [[Service and Tray]] · **Tips:** [[Tips]] — [[Station Logos in Cars]] · [[QoS on Windows]] · [[Troubleshooting]]
+5. **More** – [[AM Mode]] · [[RDS]] · [[Backup Source]] · [[Receiver Log]] · [[Service and Tray]] · **Tips:** [[Tips]] — [[Station Logos in Cars]] · [[QoS on Windows]] · [[Troubleshooting]]
 
 Downloads: [Releases](https://github.com/nikosbatsikas/radiomoon-mpx/releases) · Changes: [CHANGELOG](https://github.com/nikosbatsikas/radiomoon-mpx/blob/main/CHANGELOG.md)

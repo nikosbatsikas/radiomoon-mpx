@@ -27,6 +27,7 @@
 
 **Features**
 - [[RDS]]
+- [[AM Mode]]
 - [[Backup Source]]
 - [[Receiver Log]]
 
